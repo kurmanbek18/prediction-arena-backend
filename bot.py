@@ -1,78 +1,147 @@
 import os
-from flask import Flask
-from threading import Thread
+import asyncio
+import random
+import httpx
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, select
+import uvicorn
 
-# Создаем простейший сайт, чтобы Render понял, что бот живой
-app = Flask('')
+# --- Подключение к Neon PostgreSQL ---
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost/dbname")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://") and "+asyncpg" not in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-@app.route('/')
-def home():
-    return "Бот работает!"
+engine = create_async_engine(DATABASE_URL, echo=False, future=True)
+async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+Base = declarative_base()
 
-def run():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+async def get_db():
+    async with async_session_maker() as session:
+        yield session
 
-# Запускаем этот мини-сайт в фоне
-Thread(target=run).start()
-import telebot
-import json
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+# --- Модели БД ---
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    telegram_id = Column(String, unique=True, index=True)
+    username = Column(String, nullable=True)
+    balance = Column(Float, default=1000.0)
+    xp = Column(Integer, default=0)
+    level = Column(String, default="Хомяк-новичок")
+    language = Column(String, default="ru")
+    portfolios = relationship("Portfolio", back_populates="user")
 
-TOKEN = "9108041844:AAEpdJrO-udnMU32MHxB6KUOClCZFJZ2vIw"
-WEB_APP_URL = "https://kurmanbek18.github.io/prophet_arena_demo_bot/"
+class Token(Base):
+    __tablename__ = "tokens"
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String, unique=True, index=True)
+    name = Column(String)
+    price = Column(Float)
+    change_24h = Column(Float, default=0.0)
 
-bot = telebot.TeleBot(TOKEN)
+class Portfolio(Base):
+    __tablename__ = "portfolios"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    token_id = Column(Integer, ForeignKey("tokens.id"))
+    amount = Column(Float, default=0.0)
+    avg_buy_price = Column(Float, default=0.0)
+    user = relationship("User", back_populates="portfolios")
+    token = relationship("Token")
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    # Обработка реферальных ссылок (например: /start ref_12345)
-    args = message.text.split()
-    if len(args) > 1 and args[1].startswith("ref_"):
-        referrer_id = args[1].split("_")[1]
-        # Здесь можно сохранить реферала в базу данных
-        print(f"Пользователь {message.from_user.id} пришел по рефке от {referrer_id}")
+# --- Фоновый движок биржи ---
+cached_btc_price = 65000.0
 
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(
-        InlineKeyboardButton(text="🚀 ЗАПУСТИТЬ PREDICTION ARENA", web_app=WebAppInfo(url=WEB_APP_URL)),
-        InlineKeyboardButton(text="📢 Официальный канал", url="https://t.me/durov"), # Замени на свой канал
-        InlineKeyboardButton(text="💬 Чат сообщества", url="https://t.me/durov")
-    )
+async def market_simulation_loop(session_maker):
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=3.0)
+                if res.status_code == 200:
+                    global cached_btc_price
+                    cached_btc_price = float(res.json()["price"])
+        except:
+            pass
+
+        async with session_maker() as session:
+            result = await session.execute(select(Token))
+            tokens = result.scalars().all()
+            for token in tokens:
+                if token.symbol == "BTC":
+                    token.price = cached_btc_price
+                else:
+                    change = random.uniform(-0.02, 0.021)
+                    old = token.price
+                    token.price = max(0.000001, round(token.price * (1 + change), 6))
+                    token.change_24h = round(((token.price - old) / old) * 100, 2)
+            await session.commit()
+        await asyncio.sleep(7)
+
+# --- FastAPI Приложение ---
+app = FastAPI(title="Crypto Arena Backend")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+@app.on_event("startup")
+async def startup():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     
-    welcome_text = (
-        f"<b>Добро пожаловать в Prediction Arena, {message.from_user.first_name}!</b> 🔥\n\n"
-        "📈 Делай точные прогнозы на крипту и технологии.\n"
-        "⚡️ Майни монеты в квантовом ядре.\n"
-        "👥 Приглашай друзей и получай пассивный доход в PTS.\n\n"
-        "Жми кнопку ниже и зарабатывай прямо сейчас!"
-    )
-    bot.send_message(message.chat.id, welcome_text, reply_markup=kb, parse_mode="HTML")
+    async with async_session_maker() as session:
+        res = await session.execute(select(Token))
+        if not res.scalars().all():
+            initial = [
+                ("USDT", "Tether", 1.0), ("TON", "Toncoin", 5.5), ("BTC", "Bitcoin", 65000.0),
+                ("ETH", "Ethereum", 3500.0), ("DOGE", "Dogecoin", 0.15), ("SOL", "Solana", 140.0),
+                ("NOT", "Notcoin", 0.008), ("PEPE", "Pepe", 0.00001)
+            ]
+            for s, n, p in initial:
+                session.add(Token(symbol=s, name=n, price=p))
+            await session.commit()
 
-@bot.message_handler(content_types=['web_app_data'])
-def handle_web_app_data(message):
-    try:
-        data = json.loads(message.web_app_data.data)
-        action = data.get('action')
+    asyncio.create_task(market_simulation_loop(async_session_maker))
 
-        if action == 'bet':
-            choice = data.get('choice')
-            amount = data.get('amount')
-            bot.send_message(
-                message.chat.id, 
-                f"✅ Ставка зарегистрирована!\n🎯 Выбор: <b>{choice}</b>\n💰 Сумма: <b>{amount} PTS</b>", 
-                parse_mode="HTML"
-            )
-        
-        elif action == 'buy_boost':
-            bot.send_message(
-                message.chat.id, 
-                "⭐️ Запрос на покупку ускорителя через <b>Telegram Stars</b> принят в обработку!", 
-                parse_mode="HTML"
-            )
+# Пинг для Render
+@app.get("/ping")
+def ping():
+    return {"status": "ok"}
 
-    except Exception as e:
-        bot.send_message(message.chat.id, "⚠️ Ошибка синхронизации данных с сервером.")
+# API: Получить или создать юзера
+@app.get("/api/user/{telegram_id}")
+async def get_user(telegram_id: str, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = res.scalar_one_or_none()
+    if not user:
+        user = User(telegram_id=telegram_id, username=f"User_{telegram_id[-4:]}")
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+    return {"telegram_id": user.telegram_id, "balance": user.balance, "xp": user.xp, "level": user.level, "language": user.language}
 
-print("🚀 Бот Prediction Arena запущен и готов к взрывному росту!")
-bot.polling(none_stop=True)
+# API: Список монет
+@app.get("/api/tokens")
+async def get_tokens(db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(Token))
+    return res.scalars().all()
+
+# API: Таблица лидеров
+@app.get("/api/leaderboard")
+async def leaderboard(db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(User).order_by(User.xp.desc()).limit(10))
+    return [{"username": u.username, "xp": u.xp, "level": u.level} for u in res.scalars().all()]
+
+# Раздача фронтенда (index.html)
+@app.get("/")
+def serve_index():
+    if os.path.exists("index.html"):
+        return FileResponse("index.html")
+    return {"message": "Backend is running, but index.html is missing!"}
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("bot:app", host="0.0.0.0", port=port)
