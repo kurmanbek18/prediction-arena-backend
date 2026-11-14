@@ -1,3 +1,20 @@
+import os
+from flask import Flask
+from threading import Thread
+
+# Создаем простейший сайт, чтобы Render понял, что бот живой
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Бот работает!"
+
+def run():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+# Запускаем этот мини-сайт в фоне
+Thread(target=run).start()
 import telebot
 import json
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
