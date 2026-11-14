@@ -6,8 +6,7 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, Integer, String, Float, DateTime, select, desc
-from datetime import datetime
+from sqlalchemy import Column, Integer, String, Float, select
 import uvicorn
 
 DATABASE_URL = "postgresql+asyncpg://neondb_owner:npg_ExoNs2fyWLi1@ep-solitary-tooth-bdmpamjk-pooler.c-8.us-east-2.aws.neon.tech/neondb"
@@ -27,7 +26,7 @@ class User(Base):
     username = Column(String, default="Трейдер")
     balance = Column(Float, default=1000.0)
     xp = Column(Integer, default=0)
-    level = Column(String, default="Хомяк-новичок Академии")
+    level = Column(String, default="Элитный Трейдер")
 
 class CustomCoin(Base):
     __tablename__ = "custom_coins"
@@ -36,9 +35,20 @@ class CustomCoin(Base):
     symbol = Column(String, nullable=False)
     creator = Column(String, nullable=False)
     price = Column(Float, default=1.0)
-    market_cap = Column(Float, default=1000.0)
+    treasury = Column(Float, default=1000.0)
 
-app = FastAPI(title="Crypto Arena Pro Ultimate")
+class Duel(Base):
+    __tablename__ = "duels"
+    id = Column(Integer, primary_key=True, index=True)
+    creator_id = Column(String, nullable=False)
+    creator_name = Column(String, nullable=False)
+    amount = Column(Float, nullable=False)
+    target_coin = Column(String, default="BTC")
+    prediction = Column(String, default="up")
+    status = Column(String, default="waiting")
+    winner_name = Column(String, nullable=True)
+
+app = FastAPI(title="Crypto Arena Pro Ultimate Engine")
 
 app.add_middleware(
     CORSMiddleware,
@@ -99,44 +109,11 @@ async def update_username(data: dict, db: AsyncSession = Depends(get_db)):
         return {"success": True, "username": user.username}
     raise HTTPException(status_code=400, detail="Ошибка смены имени")
 
-@app.post("/api/trade")
-async def make_trade(data: dict, db: AsyncSession = Depends(get_db)):
-    telegram_id = data.get("telegram_id")
-    amount = float(data.get("amount", 100))
-    direction = data.get("direction")
-    
-    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
-    user = result.scalars().first()
-    if not user or user.balance < amount:
-        raise HTTPException(status_code=400, detail="Недостаточно средств")
-    
-    # Случайное событие рынка: шанс хакерской атаки или скама
-    event_chance = random.random()
-    if event_chance < 0.05: # 5% шанс взлома протокола
-        user.balance -= (amount * 0.5)
-        await db.commit()
-        return {"success": False, "message": "⚠️ Внимание! Биржу атаковали хакеры, часть сделки заморожена (-50% ставки). Учите риск-менеджмент!", "new_balance": user.balance}
-
-    is_win = random.choice([True, False])
-    if is_win:
-        profit = amount * 1.8
-        user.balance += (profit - amount)
-        user.xp += 50
-        msg = f"🟢 Успешный прогноз! Прибыль: +{profit - amount} USDT"
-    else:
-        user.balance -= amount
-        user.xp = max(0, user.xp - 20)
-        msg = f"🔴 Ошибка прогноза. Потеряно: -{amount} USDT"
-
-    await db.commit()
-    return {"success": is_win, "message": msg, "new_balance": user.balance, "xp": user.xp, "level": user.level}
-
-# Экономика пользовательских монет (Микро-экономика / Синдикаты)
 @app.get("/api/economy/coins")
 async def get_custom_coins(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(CustomCoin).limit(20))
     coins = result.scalars().all()
-    return [{"id": c.id, "name": c.name, "symbol": c.symbol, "creator": c.creator, "price": c.price} for c in coins]
+    return [{"id": c.id, "name": c.name, "symbol": c.symbol, "creator": c.creator, "price": c.price, "treasury": c.treasury} for c in coins]
 
 @app.post("/api/economy/create")
 async def create_custom_coin(data: dict, db: AsyncSession = Depends(get_db)):
@@ -144,12 +121,68 @@ async def create_custom_coin(data: dict, db: AsyncSession = Depends(get_db)):
     symbol = data.get("symbol")
     creator = data.get("creator", "Аноним")
     if not name or not symbol:
-        raise HTTPException(status_code=400, detail="Заполните название и тикер")
-    
-    coin = CustomCoin(name=name, symbol=symbol.upper(), creator=creator, price=random.uniform(0.5, 5.0))
+        raise HTTPException(status_code=400, detail="Заполните поля")
+    coin = CustomCoin(name=name, symbol=symbol.upper(), creator=creator, price=round(random.uniform(1.0, 10.0), 2), treasury=5000.0)
     db.add(coin)
     await db.commit()
-    return {"success": True, "message": f"Монета ${symbol.upper()} успешно запущена в своей экосистеме!"}
+    return {"success": True, "message": f"Синдикат ${symbol.upper()} успешно развернут!"}
+
+@app.post("/api/duels/create")
+async def create_duel(data: dict, db: AsyncSession = Depends(get_db)):
+    telegram_id = data.get("telegram_id")
+    amount = float(data.get("amount", 50))
+    coin = data.get("coin", "BTC")
+    prediction = data.get("prediction", "up")
+    
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = result.scalars().first()
+    if not user or user.balance < amount:
+        raise HTTPException(status_code=400, detail="Недостаточно средств")
+    
+    user.balance -= amount
+    duel = Duel(creator_id=telegram_id, creator_name=user.username, amount=amount, target_coin=coin, prediction=prediction, status="waiting")
+    db.add(duel)
+    await db.commit()
+    return {"success": True, "message": "Дуэль создана!"}
+
+@app.get("/api/duels")
+async def get_duels(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Duel).where(Duel.status == "waiting"))
+    duels = result.scalars().all()
+    return [{"id": d.id, "creator": d.creator_name, "amount": d.amount, "coin": d.target_coin, "prediction": d.prediction} for d in duels]
+
+@app.post("/api/duels/join")
+async def join_duel(data: dict, db: AsyncSession = Depends(get_db)):
+    duel_id = data.get("duel_id")
+    telegram_id = data.get("telegram_id")
+    
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    opponent = result.scalars().first()
+    duel_res = await db.execute(select(Duel).where(Duel.id == duel_id))
+    duel = duel_res.scalars().first()
+    
+    if not duel or duel.status != "waiting":
+        raise HTTPException(status_code=400, detail="Дуэль недоступна")
+    if not opponent or opponent.balance < duel.amount:
+        raise HTTPException(status_code=400, detail="Недостаточно средств")
+        
+    opponent.balance -= duel.amount
+    market_trend = random.choice(["up", "down"])
+    winner = duel.creator_name if duel.prediction == market_trend else opponent.username
+    
+    duel.status = "finished"
+    duel.winner_name = winner
+    prize = duel.amount * 2
+    
+    if winner == opponent.username:
+        opponent.balance += prize
+    else:
+        creator_res = await db.execute(select(User).where(User.telegram_id == duel.creator_id))
+        creator = creator_res.scalars().first()
+        if creator: creator.balance += prize
+
+    await db.commit()
+    return {"success": True, "winner": winner, "trend": market_trend, "prize": prize}
 
 if __name__ == "__main__":
     uvicorn.run("bot:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
