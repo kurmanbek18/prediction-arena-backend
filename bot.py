@@ -21,7 +21,7 @@ async def get_db():
     async with async_session_maker() as session:
         yield session
 
-# --- Расширенная Модель Пользователя ---
+# --- Модели БД ---
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -30,11 +30,18 @@ class User(Base):
     balance = Column(Float, default=1000.0)
     xp = Column(Integer, default=0)
     level = Column(String, default="Хомяк-новичок")
-    streak = Column(Integer, default=1)
-    last_login = Column(DateTime, default=datetime.utcnow)
+
+class Duel(Base):
+    __tablename__ = "duels"
+    id = Column(Integer, primary_key=True, index=True)
+    creator_id = Column(String, nullable=False)
+    creator_name = Column(String, nullable=False)
+    amount = Column(Float, nullable=False)
+    status = Column(String, default="waiting") # waiting, finished
+    winner_name = Column(String, nullable=True)
 
 # --- FastAPI приложение ---
-app = FastAPI(title="Crypto Arena Backend Pro")
+app = FastAPI(title="Crypto Arena Pro + Duels")
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,7 +56,7 @@ async def startup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-# --- 1. Рыночные цены в реальном времени ---
+# --- Рынок ---
 @app.get("/api/market")
 async def get_market_prices():
     try:
@@ -73,7 +80,7 @@ async def get_market_prices():
             "TON": {"price": 5.5, "change": 4.1}
         }
 
-# --- 2. Профиль и Авторизация ---
+# --- Профиль ---
 @app.get("/api/user/{telegram_id}")
 async def get_user(telegram_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.telegram_id == telegram_id))
@@ -85,42 +92,93 @@ async def get_user(telegram_id: str, db: AsyncSession = Depends(get_db)):
         await db.refresh(user)
     return user
 
-# --- 3. Игровая механика: Сделки / Прогнозы (Long / Short) ---
+# --- Сделки (Лонг/Шорт) ---
 @app.post("/api/trade")
 async def make_trade(data: dict, db: AsyncSession = Depends(get_db)):
     telegram_id = data.get("telegram_id")
     amount = float(data.get("amount", 100))
-    direction = data.get("direction") # "up" или "down"
+    direction = data.get("direction")
     
     result = await db.execute(select(User).where(User.telegram_id == telegram_id))
     user = result.scalars().first()
     
     if not user or user.balance < amount:
-        raise HTTPException(status_code=400, detail="Недостаточно средств на балансе")
+        raise HTTPException(status_code=400, detail="Недостаточно средств")
     
-    # Симуляция исхода сделки (в продакшене привязывается к таймеру графика)
     is_win = random.choice([True, False])
-    
     if is_win:
         profit = amount * 1.8
         user.balance += (profit - amount)
         user.xp += 50
-        result_msg = f"Победа! Вы выиграли {profit} USDT"
+        msg = f"Победа! +{profit - amount} USDT"
     else:
         user.balance -= amount
         user.xp = max(0, user.xp - 20)
-        result_msg = f"Поражение. Вы потеряли {amount} USDT"
-        
-    # Проверка апгрейда уровня
-    if user.xp > 500:
-        user.level = "Крипто-Трейдер"
-    if user.xp > 2000:
-        user.level = "Крипто-Титан"
+        msg = f"Поражение. -{amount} USDT"
 
     await db.commit()
-    return {"success": is_win, "message": result_msg, "new_balance": user.balance, "xp": user.xp, "level": user.level}
+    return {"success": is_win, "message": msg, "new_balance": user.balance, "xp": user.xp, "level": user.level}
 
-# --- 4. Таблица лидеров ---
+# --- ДУЭЛИ 1 на 1 ---
+@app.post("/api/duels/create")
+async def create_duel(data: dict, db: AsyncSession = Depends(get_db)):
+    telegram_id = data.get("telegram_id")
+    amount = float(data.get("amount", 50))
+    
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = result.scalars().first()
+    if not user or user.balance < amount:
+        raise HTTPException(status_code=400, detail="Недостаточно средств для дуэли")
+    
+    user.balance -= amount
+    duel = Duel(creator_id=telegram_id, creator_name=user.username, amount=amount, status="waiting")
+    db.add(duel)
+    await db.commit()
+    return {"success": True, "message": "Дуэль создана! Ожидаем соперника."}
+
+@app.get("/api/duels")
+async def get_duels(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Duel).where(Duel.status == "waiting"))
+    duels = result.scalars().all()
+    return [{"id": d.id, "creator": d.creator_name, "amount": d.amount} for d in duels]
+
+@app.post("/api/duels/join")
+async def join_duel(data: dict, db: AsyncSession = Depends(get_db)):
+    duel_id = data.get("duel_id")
+    telegram_id = data.get("telegram_id")
+    
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    opponent = result.scalars().first()
+    
+    duel_res = await db.execute(select(Duel).where(Duel.id == duel_id))
+    duel = duel_res.scalars().first()
+    
+    if not duel or duel.status != "waiting":
+        raise HTTPException(status_code=400, detail="Дуэль недоступна")
+    if not opponent or opponent.balance < duel.amount:
+        raise HTTPException(status_code=400, detail="Недостаточно средств для участия")
+        
+    opponent.balance -= duel.amount
+    
+    # Случайный победитель дуэли
+    winner = random.choice([duel.creator_name, opponent.username])
+    duel.status = "finished"
+    duel.winner_name = winner
+    
+    # Находим победителя и отдаем ему двойной банк
+    win_sum = duel.amount * 2
+    if winner == opponent.username:
+        opponent.balance += win_sum
+    else:
+        creator_res = await db.execute(select(User).where(User.telegram_id == duel.creator_id))
+        creator = creator_res.scalars().first()
+        if creator:
+            creator.balance += win_sum
+            
+    await db.commit()
+    return {"success": True, "winner": winner, "prize": win_sum}
+
+# --- Таблица лидеров ---
 @app.get("/api/leaderboard")
 async def get_leaderboard(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).order_by(desc(User.balance)).limit(10))
