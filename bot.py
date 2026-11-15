@@ -1,6 +1,6 @@
 """
-Crypto Arena Pro — Финальный монолитный бэкенд (FastAPI + Neon Postgres).
-Включает: реальные котировки Binance, PvP дуэли, футбол, академию, создание AMM-токенов и рефералы.
+Crypto Arena Pro — Полный монолитный бэкенд (FastAPI + Neon Postgres).
+Включает: реальные котировки Binance, PvP дуэли, футбол, академию, создание AMM-токенов, рефералы и таблицу лидеров.
 """
 import os, re, time, json, hmac, hashlib, asyncio
 from contextlib import asynccontextmanager
@@ -16,45 +16,64 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 
+# ═══════════════════════ ПРАВИЛА МИРА (меняй здесь) ═══════════════════════
 CFG = dict(
-    START_BALANCE=1000.0,
-    REF_BONUS_USDT=50.0,
-    REF_BONUS_XP=25,
-    TRADE_FEE=0.001,
-    AMM_FEE=0.01,
-    COIN_CREATE_COST=100.0,
-    COIN_SUPPLY=1_000_000.0,
-    FOUNDER_SHARE=0.10,
-    DUEL_FEE=0.05,
+    START_BALANCE=1000.0,        # стартовый капитал нового игрока, USDT
+    REF_BONUS_USDT=50.0,         # бонус пригласившему
+    REF_BONUS_XP=25,             # бонус опыта за друга
+    TRADE_FEE=0.001,             # комиссия биржи на реальные монеты (0.1%)
+    AMM_FEE=0.01,                # комиссия пула игровых токенов (1%)
+    COIN_CREATE_COST=100.0,      # цена запуска токена, USDT
+    COIN_SUPPLY=1_000_000.0,     # общая эмиссия токена
+    FOUNDER_SHARE=0.10,          # доля основателя
+    DUEL_FEE=0.05,               # комиссия арены с банка дуэли
     DUEL_DURATIONS=[60, 300, 900],
-    DUEL_WAIT_TTL=1800,
+    DUEL_WAIT_TTL=1800,          # через сколько сек. непринятая дуэль отменяется
     MIN_BET=10.0,
-    DAILY_BASE=25.0,
+    DAILY_BASE=25.0,             # ежедневная награда
     FOOTBALL_ODDS={"1": 2.2, "X": 3.0, "2": 2.9},
-    XP_TRADE=5, XP_DUEL_WIN=30, XP_DUEL_PLAY=10, XP_BET_WIN=20,
+    XP_TRADE=5, XP_DUEL_WIN=30, XP_DUEL_PLAY=10, XP_BET_WIN=20, XP_BET_PLAY=3,
 )
 
-SYMBOLS = {
-    "BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT", 
-    "TON": "TONUSDT", "BNB": "BNBUSDT", "XRP": "XRPUSDT", "DOGE": "DOGEUSDT"
-}
+SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT", "TON": "TONUSDT",
+           "BNB": "BNBUSDT", "XRP": "XRPUSDT", "DOGE": "DOGEUSDT"}
 
-LEAGUES = {
-    "4328": "Премьер-лига", "4335": "Ла Лига", "4331": "Бундеслига",
-    "4332": "Серия A", "4480": "Лига чемпионов"
-}
+LEAGUES = {"4328": "Премьер-лига", "4335": "Ла Лига", "4331": "Бундеслига",
+           "4332": "Серия A", "4480": "Лига чемпионов"}
 
-LEVELS = [
-    (0, "HODL Новичок"), (150, "Скальпер"), (500, "Трейдер"), 
-    (1200, "Крипто Аналитик"), (3000, "Мастер Рынка"), (7000, "Крипто Акула")
-]
+LEVELS = [(0, "HODL Новичок"), (150, "Скальпер"), (500, "Трейдер"), (1200, "Крипто Аналитик"),
+          (3000, "Мастер Рынка"), (7000, "Крипто Акула")]
 
 LESSONS = [
-    {"id": "inflation", "emoji": "🖨️", "title": "Инфляция", "text": "Если печатать много денег, они дешевеют.", "q": "Что будет при росте денежной массы?", "options": ["Цены вырастут", "Цены упадут", "Ничего"], "answer": 0, "explain": "Инфляция ведет к росту цен.", "xp": 40, "usdt": 20},
-    {"id": "supply_demand", "emoji": "⚖️", "title": "Спрос и предложение", "text": "Высокий спрос при малом предложении поднимает цену.", "q": "Все хотят купить монету, а продавцов мало?", "options": ["Цена вырастет", "Цена упадет", "Без изменений"], "answer": 0, "explain": "Дефицит толкает цену вверх.", "xp": 40, "usdt": 20},
+    {"id": "inflation", "emoji": "🖨️", "title": "Инфляция: почему деньги дешевеют",
+     "text": "Если государство или проект печатает много новых денег, а товаров столько же, то каждая единица денег покупает меньше. Это инфляция. У Bitcoin эмиссия жёстко ограничена 21 млн монет.",
+     "q": "Что произойдёт с ценами, если денег в обороте станет больше, а товаров столько же?",
+     "options": ["Цены вырастут", "Цены упадут", "Ничего не изменится"], "answer": 0,
+     "explain": "Больше денег гоняются за тем же количеством товаров — цены растут.", "xp": 40, "usdt": 20},
+    {"id": "supply_demand", "emoji": "⚖️", "title": "Спрос и предложение",
+     "text": "Цена — это точка встречи покупателей и продавцов. Хотят купить больше, чем продают — цена растёт. Новости, страх и жадность меняют спрос за секунды.",
+     "q": "Все хотят купить монету, а продавцов мало. Что будет с ценой?",
+     "options": ["Вырастет", "Упадёт", "Останется прежней"], "answer": 0,
+     "explain": "Высокий спрос при малом предложении поднимает цену.", "xp": 40, "usdt": 20},
+    {"id": "marketcap", "emoji": "🏢", "title": "Капитализация: что значит «дорогая» монета",
+     "text": "Цена одной монеты мало что говорит. Важна капитализация = цена × количество монет.",
+     "q": "Монета стоит $2, всего выпущено 1 000 000 штук. Какая капитализация?",
+     "options": ["$500 000", "$2 000 000", "$1 000 000"], "answer": 1,
+     "explain": "2 × 1 000 000 = 2 000 000.", "xp": 50, "usdt": 25},
+    {"id": "risk", "emoji": "🎢", "title": "Риск и волатильность",
+     "text": "Волатильность — насколько сильно скачет цена. Убыток в 50% требует прибыли в 100%, чтобы вернуться в ноль.",
+     "q": "Актив упал на 50%. Сколько нужно роста, чтобы вернуться к исходной цене?",
+     "options": ["50%", "100%", "150%"], "answer": 1,
+     "explain": "От 50 до 100 — это рост вдвое, то есть +100%.", "xp": 50, "usdt": 25},
+    {"id": "zero_sum", "emoji": "⚔️", "title": "Игра с нулевой суммой и комиссия",
+     "text": "В дуэли победитель забирает ставку проигравшего, но арена берёт комиссию.",
+     "q": "Шансы 50/50, но арена берёт комиссию. Каков результат в долгую?",
+     "options": ["Игрок в плюсе", "Игрок в минусе из-за комиссий", "Ровно ноль"], "answer": 1,
+     "explain": "Комиссия каждый раз уменьшает капитал.", "xp": 60, "usdt": 30},
 ]
 LESSON_BY_ID = {l["id"]: l for l in LESSONS}
 
+# ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
 raw_db_url = os.getenv("DATABASE_URL", "").strip()
 if not raw_db_url:
     raw_db_url = "sqlite+aiosqlite:///./crypto_arena.db"
@@ -155,17 +174,24 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS streak INTEGER DEFAULT 0",
 ]
 
-http = httpx.AsyncClient(timeout=10, headers={"User-Agent": "CryptoArena/4.0"})
+# ═══════════════════════ ВНЕШНИЕ ДАННЫЕ ═══════════════════════
+http = httpx.AsyncClient(timeout=10, headers={"User-Agent": "crypto-arena/4.0"})
 _cache: dict = {}
 BINANCE_BASES = ["https://data-api.binance.vision", "https://api.binance.com"]
 SPORTSDB_KEY = os.getenv("SPORTSDB_KEY", "3")
+INTERVALS = {"1m", "5m", "15m", "1h", "4h", "1d"}
 
 async def cached(key, ttl, fn):
     now = time.time()
     hit = _cache.get(key)
     if hit and now - hit[0] < ttl:
         return hit[1]
-    val = await fn()
+    try:
+        val = await fn()
+    except Exception:
+        if hit:
+            return hit[1]
+        raise
     _cache[key] = (now, val)
     return val
 
@@ -179,6 +205,11 @@ async def binance(path, params):
             continue
     raise HTTPException(503, "Биржа недоступна")
 
+async def sportsdb(path, params):
+    r = await http.get(f"https://www.thesportsdb.com/api/v1/json/{SPORTSDB_KEY}/{path}", params=params)
+    r.raise_for_status()
+    return r.json()
+
 async def fetch_market():
     syms = json.dumps(list(SYMBOLS.values()), separators=(",", ":"))
     rows = await binance("/api/v3/ticker/24hr", {"symbols": syms})
@@ -188,8 +219,38 @@ async def fetch_market():
                 "volume": float(by[v]["quoteVolume"])} for k, v in SYMBOLS.items() if v in by}
 
 async def get_market():
-    return await cached("market", 3, fetch_market)
+    try:
+        return await cached("market", 4, fetch_market)
+    except Exception:
+        raise HTTPException(503, "Рынок временно недоступен")
 
+def kickoff_ts(e):
+    ts = e.get("strTimestamp") or f"{e.get('dateEvent')}T{e.get('strTime') or '00:00:00'}"
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "")).replace(tzinfo=timezone.utc).timestamp()
+    except Exception:
+        return None
+
+async def football_events():
+    async def one(lid, name):
+        try:
+            data = await sportsdb("eventsnextleague.php", {"id": lid})
+        except Exception:
+            return []
+        out = []
+        for e in data.get("events") or []:
+            ko = kickoff_ts(e)
+            if ko and ko > time.time() + 60:
+                out.append({"id": e["idEvent"], "league": name, "home": e["strHomeTeam"],
+                            "away": e["strAwayTeam"], "kickoff": ko})
+        return out
+    res = await asyncio.gather(*[one(k, v) for k, v in LEAGUES.items()])
+    ev = sorted(sum(res, []), key=lambda x: x["kickoff"])[:40]
+    for e in ev:
+        e["odds"] = CFG["FOOTBALL_ODDS"]
+    return ev
+
+# ═══════════════════════ АВТОРИЗАЦИЯ ═══════════════════════
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 async def auth(request: Request):
@@ -201,7 +262,7 @@ async def auth(request: Request):
         check = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
         secret = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
         if not hmac.compare_digest(hmac.new(secret, check.encode(), hashlib.sha256).hexdigest(), h):
-            raise HTTPException(401, "Ошибка авторизации")
+            raise HTTPException(401, "Неверная подпись Telegram")
         u = json.loads(data["user"])
         return str(u["id"]), u.get("first_name") or u.get("username"), ref_id
     if init:
@@ -213,13 +274,14 @@ async def auth(request: Request):
     test = request.headers.get("X-Test-User", "guest_user")
     return test[:40], "Трейдер", ref_id
 
+# ═══════════════════════ ХЕЛПЕРЫ ═══════════════════════
 async def load_user(db, uid, name=None, ref_id=None, lock=False):
     q = select(User).where(User.telegram_id == uid)
     if lock:
         q = q.with_for_update()
     u = (await db.execute(q)).scalars().first()
     if not u:
-        u = User(telegram_id=uid, username=(name or f"Trader_{uid[-4:]}")[:24], balance=CFG["START_BALANCE"])
+        u = User(telegram_id=uid, username=(name or f"Trader_{uid[-4:]}")[:24], balance=CFG["START_BALANCE"], xp=0)
         if ref_id and ref_id != uid:
             parent = (await db.execute(select(User).where(User.telegram_id == ref_id))).scalars().first()
             if parent:
@@ -235,12 +297,55 @@ async def load_user(db, uid, name=None, ref_id=None, lock=False):
     return u
 
 def level_of(xp):
-    cur = LEVELS[0]
-    for need, name in LEVELS:
+    cur, nxt = LEVELS[0], None
+    for i, (need, name) in enumerate(LEVELS):
         if xp >= need:
             cur = (need, name)
-    return {"name": cur[1], "xp": xp}
+            nxt = LEVELS[i + 1] if i + 1 < len(LEVELS) else None
+    return {"name": cur[1], "xp": xp, "from": cur[0], "to": nxt[0] if nxt else None}
 
+def coin_price(c):
+    return c.reserve_usdt / c.reserve_token if c.reserve_token > 0 else 0
+
+async def snapshot_prices(db):
+    try:
+        prices = {k: v["price"] for k, v in (await get_market()).items()}
+    except Exception:
+        prices = {}
+    for c in (await db.execute(select(Coin))).scalars():
+        prices[c.symbol] = coin_price(c)
+    return prices
+
+async def add_balance(db, uid, delta, xp=0):
+    await db.execute(update(User).where(User.telegram_id == uid)
+                     .values(balance=User.balance + delta, xp=User.xp + xp))
+
+async def me_payload(db, u):
+    prices = await snapshot_prices(db)
+    hs = (await db.execute(select(Holding).where(Holding.uid == u.telegram_id, Holding.amount > 1e-12))).scalars().all()
+    items, hv = [], 0.0
+    for h in hs:
+        p = prices.get(h.symbol, h.avg_price)
+        hv += h.amount * p
+        items.append({"symbol": h.symbol, "amount": h.amount, "avg": h.avg_price, "price": p,
+                      "value": h.amount * p, "pnl": (p - h.avg_price) * h.amount})
+    return {"id": u.telegram_id, "username": u.username, "balance": u.balance, "xp": u.xp,
+            "level": level_of(u.xp), "streak": u.streak or 0, "ref_code": u.telegram_id,
+            "lessons": [x for x in (u.lessons or "").split(",") if x], "holdings": items,
+            "networth": u.balance + hv, "daily_ready": time.time() - (u.last_daily or 0) > 20 * 3600}
+
+def duel_dict(d, uid):
+    is_creator = d.creator_id == uid
+    my_side = d.prediction if is_creator else ("down" if d.prediction == "up" else "up")
+    res = None
+    if d.status == "finished":
+        res = "tie" if not d.winner_id else ("win" if d.winner_id == uid else "lose")
+    return {"id": d.id, "creator": d.creator_name, "opponent": d.opponent_name, "coin": d.coin,
+            "prediction": d.prediction, "my_side": my_side, "is_creator": is_creator,
+            "amount": d.amount, "duration": d.duration, "status": d.status, "entry": d.entry_price,
+            "exit": d.exit_price, "ends_at": d.ends_at, "result": res, "prize": d.prize}
+
+# ═══════════════════════ ПРИЛОЖЕНИЕ ═══════════════════════
 @asynccontextmanager
 async def lifespan(app):
     async with engine.begin() as conn:
@@ -250,18 +355,49 @@ async def lifespan(app):
                 await conn.execute(text(s))
             except Exception:
                 pass
+    task = asyncio.create_task(settle_loop())
     yield
+    task.cancel()
     await http.aclose()
 
 app = FastAPI(title="Crypto Arena Pro", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+@app.get("/")
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 @app.get("/api/me")
 async def api_me(db: AsyncSession = Depends(get_db), who=Depends(auth)):
     u = await load_user(db, who[0], who[1], who[2])
     await db.commit()
-    return {"id": u.telegram_id, "username": u.username, "balance": u.balance, "xp": u.xp,
-            "level": level_of(u.xp), "ref_code": u.telegram_id, "streak": u.streak or 0}
+    return await me_payload(db, u)
+
+@app.post("/api/user/update_name")
+async def update_name(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    name = re.sub(r"\s+", " ", str(d.get("username", ""))).strip()[:24]
+    if len(name) < 2:
+        raise HTTPException(400, "Имя слишком короткое")
+    u = await load_user(db, who[0], who[1], lock=True)
+    u.username = name
+    await db.commit()
+    return {"success": True, "username": name}
+
+@app.post("/api/daily")
+async def daily(db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    u = await load_user(db, who[0], who[1], lock=True)
+    now = time.time()
+    gap = now - (u.last_daily or 0)
+    if gap < 20 * 3600:
+        raise HTTPException(400, f"Следующая награда через {int((20 * 3600 - gap) // 3600) + 1} ч.")
+    u.streak = (u.streak or 0) + 1 if gap < 48 * 3600 else 1
+    reward = CFG["DAILY_BASE"] + min(u.streak, 7) * 5
+    u.balance += reward
+    u.last_daily = now
+    u.xp += 10
+    await db.commit()
+    return {"reward": reward, "streak": u.streak}
 
 @app.get("/api/friends")
 async def get_friends(db: AsyncSession = Depends(get_db), who=Depends(auth)):
@@ -270,17 +406,179 @@ async def get_friends(db: AsyncSession = Depends(get_db), who=Depends(auth)):
     return {"total": len(friends), "earned": len(friends) * CFG["REF_BONUS_USDT"],
             "list": [{"name": f.username, "level": level_of(f.xp)["name"]} for f in friends]}
 
+@app.get("/api/leaderboard")
+async def leaderboard(db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    prices = await snapshot_prices(db)
+    users = (await db.execute(select(User).order_by(User.balance.desc()).limit(200))).scalars().all()
+    hv = {}
+    for h in (await db.execute(select(Holding).where(Holding.amount > 1e-12))).scalars():
+        hv[h.uid] = hv.get(h.uid, 0) + h.amount * prices.get(h.symbol, h.avg_price)
+    rows = [{"name": u.username, "worth": u.balance + hv.get(u.telegram_id, 0),
+             "level": level_of(u.xp or 0)["name"], "me": u.telegram_id == who[0]} for u in users]
+    return sorted(rows, key=lambda r: -r["worth"])[:20]
+
 @app.get("/api/market")
 async def market():
     return await get_market()
 
+@app.get("/api/klines/{sym}")
+async def klines(sym: str, interval: str = "15m", limit: int = 120):
+    sym = sym.upper()
+    if sym not in SYMBOLS or interval not in INTERVALS:
+        raise HTTPException(400, "Неверный актив")
+    limit = max(10, min(limit, 300))
+    async def f():
+        rows = await binance("/api/v3/klines", {"symbol": SYMBOLS[sym], "interval": interval, "limit": limit})
+        return [{"time": int(r[0] / 1000), "open": float(r[1]), "high": float(r[2]),
+                 "low": float(r[3]), "close": float(r[4])} for r in rows]
+    try:
+        return await cached(f"k:{sym}:{interval}:{limit}", 6, f)
+    except Exception:
+        raise HTTPException(503, "График недоступен")
+
+@app.post("/api/trade")
+async def trade(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    sym, side = str(d.get("symbol", "")).upper(), d.get("side")
+    if side not in ("buy", "sell"):
+        raise HTTPException(400, "Неверное действие")
+    try:
+        usdt, qty, pct = float(d.get("usdt") or 0), float(d.get("qty") or 0), float(d.get("pct") or 0)
+    except ValueError:
+        raise HTTPException(400, "Неверная сумма")
+    u = await load_user(db, who[0], who[1], lock=True)
+    coin, price = None, None
+    if sym in SYMBOLS:
+        m = (await get_market()).get(sym)
+        if not m:
+            raise HTTPException(503, "Цена недоступна")
+        price = m["price"]
+    else:
+        coin = (await db.execute(select(Coin).where(Coin.symbol == sym).with_for_update())).scalars().first()
+        if not coin:
+            raise HTTPException(404, "Актив не найден")
+    h = (await db.execute(select(Holding).where(Holding.uid == u.telegram_id, Holding.symbol == sym)
+                          .with_for_update())).scalars().first()
+    slip, pnl = 0.0, None
+
+    if side == "buy":
+        if usdt < 1 or usdt > u.balance + 1e-9:
+            raise HTTPException(400, "Недостаточно средств")
+        if coin:
+            fee = usdt * CFG["AMM_FEE"]
+            dx = usdt - fee
+            k = coin.reserve_usdt * coin.reserve_token
+            spot = coin_price(coin)
+            new_ru = coin.reserve_usdt + dx
+            new_rt = k / new_ru
+            q = coin.reserve_token - new_rt
+            execp = dx / q
+            slip = (execp / spot - 1) * 100
+            coin.reserve_usdt, coin.reserve_token = new_ru, new_rt
+            coin.fees_earned += fee
+            await add_balance(db, coin.creator_id, fee)
+            db.add(Tick(symbol=sym, ts=int(time.time()), price=coin_price(coin)))
+        else:
+            fee = usdt * CFG["TRADE_FEE"]
+            q = (usdt - fee) / price
+            execp = price
+        u.balance -= usdt
+        if h:
+            h.avg_price = (h.amount * h.avg_price + q * execp) / (h.amount + q)
+            h.amount += q
+        else:
+            db.add(Holding(uid=u.telegram_id, symbol=sym, amount=q, avg_price=execp))
+        msg = f"Куплено {q:.6g} {sym} по ${execp:.6g}. Комиссия ${fee:.2f}."
+    else:
+        if not h or h.amount <= 1e-12:
+            raise HTTPException(400, "У вас нет актива")
+        if pct > 0:
+            qty = h.amount if pct >= 100 else h.amount * pct / 100
+        if qty <= 0 or qty > h.amount * (1 + 1e-9):
+            raise HTTPException(400, "Неверное количество")
+        qty = min(qty, h.amount)
+        if coin:
+            k = coin.reserve_usdt * coin.reserve_token
+            spot = coin_price(coin)
+            gross = coin.reserve_usdt - k / (coin.reserve_token + qty)
+            fee = gross * CFG["AMM_FEE"]
+            out = gross - fee
+            coin.reserve_usdt -= gross
+            coin.reserve_token += qty
+            coin.fees_earned += fee
+            await add_balance(db, coin.creator_id, fee)
+            execp = out / qty
+            slip = (1 - execp / spot) * 100
+            db.add(Tick(symbol=sym, ts=int(time.time()), price=coin_price(coin)))
+        else:
+            gross = qty * price
+            fee = gross * CFG["TRADE_FEE"]
+            out = gross - fee
+            execp = out / qty
+        pnl = (execp - h.avg_price) * qty
+        h.amount -= qty
+        if h.amount < 1e-12:
+            h.amount = 0
+        u.balance += out
+        msg = f"Продано {qty:.6g} {sym} по ${execp:.6g}. Комиссия ${fee:.2f}. Результат: {pnl:+.2f} USDT."
+    u.xp += CFG["XP_TRADE"]
+    await db.commit()
+    return {"ok": True, "msg": msg, "pnl": pnl}
+
+@app.get("/api/coins")
+async def coins_list(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Coin).order_by(Coin.id.desc()).limit(50))).scalars().all()
+    return [{"symbol": c.symbol, "name": c.name, "description": c.description, "creator": c.creator_name,
+             "price": coin_price(c), "mcap": coin_price(c) * CFG["COIN_SUPPLY"],
+             "liquidity": c.reserve_usdt, "fees": c.fees_earned} for c in rows]
+
+@app.post("/api/coins/create")
+async def coin_create(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    name = re.sub(r"\s+", " ", str(d.get("name", ""))).strip()[:30]
+    sym = str(d.get("symbol", "")).strip().upper()
+    desc = str(d.get("description", "")).strip()[:140]
+    if len(name) < 3 or not re.fullmatch(r"[A-Z0-9]{3,6}", sym) or sym in SYMBOLS or sym == "USDT":
+        raise HTTPException(400, "Название от 3 символов, тикер — 3–6 латинских букв/цифр")
+    u = await load_user(db, who[0], who[1], lock=True)
+    cost = CFG["COIN_CREATE_COST"]
+    if u.balance < cost:
+        raise HTTPException(400, f"Нужно {cost:.0f} USDT для запуска токена")
+    total = CFG["COIN_SUPPLY"]
+    founder = total * CFG["FOUNDER_SHARE"]
+    coin = Coin(name=name, symbol=sym, description=desc, creator_id=u.telegram_id, creator_name=u.username,
+                reserve_usdt=cost, reserve_token=total - founder)
+    u.balance -= cost
+    db.add(coin)
+    db.add(Holding(uid=u.telegram_id, symbol=sym, amount=founder, avg_price=coin_price(coin)))
+    db.add(Tick(symbol=sym, ts=int(time.time()), price=coin_price(coin)))
+    u.xp += 30
+    try:
+        await db.commit()
+    except IntegrityError:
+        raise HTTPException(400, "Токен с таким именем или тикером уже существует")
+    return {"success": True, "message": f"Токен ${sym} успешно запущен!"}
+
+@app.get("/api/coins/{sym}/history")
+async def coin_history(sym: str, db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Tick).where(Tick.symbol == sym.upper()).order_by(Tick.id.desc()).limit(300))).scalars().all()
+    by_time = {}
+    for r in reversed(rows):
+        by_time[r.ts] = r.price
+    pts = [{"time": t, "value": v} for t, v in sorted(by_time.items())]
+    if len(pts) == 1:
+        pts.insert(0, {"time": pts[0]["time"] - 60, "value": pts[0]["value"]})
+    return pts
+
 @app.post("/api/duels/create")
 async def duel_create(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
     coin, pred = str(d.get("coin", "")).upper(), d.get("prediction")
-    amount = float(d.get("amount", 10))
-    duration = int(d.get("duration", 300))
-    if coin not in SYMBOLS or pred not in ("up", "down"):
-        raise HTTPException(400, "Параметры неверны")
+    try:
+        amount, duration = float(d.get("amount", 0)), int(d.get("duration", 300))
+    except ValueError:
+        raise HTTPException(400, "Неверные параметры")
+    if coin not in SYMBOLS or pred not in ("up", "down") or duration not in CFG["DUEL_DURATIONS"]:
+        raise HTTPException(400, "Неверные параметры дуэли")
+    if amount < CFG["MIN_BET"]:
+        raise HTTPException(400, f"Минимальная ставка {CFG['MIN_BET']:.0f} USDT")
     u = await load_user(db, who[0], who[1], lock=True)
     if u.balance < amount:
         raise HTTPException(400, "Недостаточно средств")
@@ -293,10 +591,179 @@ async def duel_create(d: dict, db: AsyncSession = Depends(get_db), who=Depends(a
 @app.get("/api/duels")
 async def duels_list(db: AsyncSession = Depends(get_db), who=Depends(auth)):
     uid = who[0]
-    open_rows = (await db.execute(select(Duel).where(Duel.status == "waiting", Duel.creator_id != uid).limit(20))).scalars().all()
-    mine = (await db.execute(select(Duel).where(or_(Duel.creator_id == uid, Duel.opponent_id == uid)).limit(10))).scalars().all()
-    return {"open": [{"id": d.id, "creator": d.creator_name, "coin": d.coin, "amount": d.amount, "pred": d.prediction} for d in open_rows],
-            "mine": [{"id": d.id, "coin": d.coin, "amount": d.amount, "status": d.status} for d in mine]}
+    open_rows = (await db.execute(select(Duel).where(Duel.status == "waiting", Duel.creator_id != uid)
+                                  .order_by(Duel.id.desc()).limit(30))).scalars().all()
+    mine = (await db.execute(select(Duel).where(or_(Duel.creator_id == uid, Duel.opponent_id == uid),
+                                                Duel.status != "cancelled")
+                             .order_by(Duel.id.desc()).limit(15))).scalars().all()
+    return {"open": [duel_dict(x, uid) for x in open_rows], "mine": [duel_dict(x, uid) for x in mine]}
+
+@app.post("/api/duels/join")
+async def duel_join(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    u = await load_user(db, who[0], who[1], lock=True)
+    duel = (await db.execute(select(Duel).where(Duel.id == int(d.get("duel_id", 0))).with_for_update())).scalars().first()
+    if not duel or duel.status != "waiting":
+        raise HTTPException(400, "Дуэль недоступна")
+    if duel.creator_id == u.telegram_id:
+        raise HTTPException(400, "Нельзя принять свой вызов")
+    if u.balance < duel.amount:
+        raise HTTPException(400, "Недостаточно средств")
+    m = (await get_market()).get(duel.coin)
+    if not m:
+        raise HTTPException(503, "Цена не определена")
+    price = m["price"]
+    u.balance -= duel.amount
+    duel.opponent_id, duel.opponent_name = u.telegram_id, u.username
+    duel.status, duel.entry_price, duel.ends_at = "active", price, time.time() + duel.duration
+    await db.commit()
+    return {"success": True, "message": "Дуэль началась!"}
+
+@app.post("/api/duels/cancel")
+async def duel_cancel(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    duel = (await db.execute(select(Duel).where(Duel.id == int(d.get("duel_id", 0))).with_for_update())).scalars().first()
+    if not duel or duel.creator_id != who[0] or duel.status != "waiting":
+        raise HTTPException(400, "Нельзя отменить")
+    duel.status = "cancelled"
+    await add_balance(db, duel.creator_id, duel.amount)
+    await db.commit()
+    return {"success": True}
+
+async def settle_duels(db):
+    now = time.time()
+    stale = (await db.execute(select(Duel).where(Duel.status == "waiting", Duel.created_at < now - CFG["DUEL_WAIT_TTL"])
+                              .with_for_update(skip_locked=True))).scalars().all()
+    for d in stale:
+        d.status = "cancelled"
+        await add_balance(db, d.creator_id, d.amount)
+    due = (await db.execute(select(Duel).where(Duel.status == "active", Duel.ends_at <= now)
+                            .with_for_update(skip_locked=True))).scalars().all()
+    if due:
+        try:
+            prices = await get_market()
+        except HTTPException:
+            await db.commit()
+            return
+        for d in due:
+            if d.coin not in prices:
+                continue
+            ex = prices[d.coin]["price"]
+            d.exit_price, d.status = ex, "finished"
+            if ex == d.entry_price:
+                d.winner_id = None
+                await add_balance(db, d.creator_id, d.amount, CFG["XP_DUEL_PLAY"])
+                await add_balance(db, d.opponent_id, d.amount, CFG["XP_DUEL_PLAY"])
+                continue
+            trend = "up" if ex > d.entry_price else "down"
+            creator_wins = d.prediction == trend
+            win, lose = (d.creator_id, d.opponent_id) if creator_wins else (d.opponent_id, d.creator_id)
+            d.winner_id = win
+            d.prize = d.amount * 2 * (1 - CFG["DUEL_FEE"])
+            await add_balance(db, win, d.prize, CFG["XP_DUEL_WIN"])
+            await add_balance(db, lose, 0, CFG["XP_DUEL_PLAY"])
+    await db.commit()
+
+@app.get("/api/football/events")
+async def fb_events():
+    try:
+        return await cached("fb", 300, football_events)
+    except Exception:
+        return []
+
+@app.post("/api/football/bet")
+async def fb_bet(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    pick = d.get("pick")
+    try:
+        amount = float(d.get("amount", 0))
+    except ValueError:
+        raise HTTPException(400, "Неверная сумма")
+    if pick not in CFG["FOOTBALL_ODDS"] or amount < CFG["MIN_BET"]:
+        raise HTTPException(400, f"Минимальная ставка {CFG['MIN_BET']:.0f} USDT")
+    ev = next((e for e in await fb_events() if e["id"] == str(d.get("event_id"))), None)
+    if not ev or ev["kickoff"] < time.time() + 60:
+        raise HTTPException(400, "Ставки закрыты")
+    u = await load_user(db, who[0], who[1], lock=True)
+    if u.balance < amount:
+        raise HTTPException(400, "Недостаточно средств")
+    u.balance -= amount
+    db.add(Bet(uid=u.telegram_id, event_id=ev["id"], event_name=f"{ev['home']} — {ev['away']}", pick=pick,
+               amount=amount, odds=CFG["FOOTBALL_ODDS"][pick], kickoff=ev["kickoff"]))
+    await db.commit()
+    return {"success": True, "message": "Ставка принята!"}
+
+@app.get("/api/football/bets")
+async def fb_bets(db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    rows = (await db.execute(select(Bet).where(Bet.uid == who[0]).order_by(Bet.id.desc()).limit(20))).scalars().all()
+    return [{"event": b.event_name, "pick": b.pick, "amount": b.amount, "odds": b.odds,
+             "status": b.status, "kickoff": b.kickoff} for b in rows]
+
+FINISHED = {"Match Finished", "FT", "AET", "PEN", "Finished"}
+
+async def settle_bets(db):
+    now = time.time()
+    bets = (await db.execute(select(Bet).where(Bet.status == "open", Bet.kickoff < now - 7200)
+                             .limit(30).with_for_update(skip_locked=True))).scalars().all()
+    looked = {}
+    for b in bets:
+        if b.event_id not in looked:
+            try:
+                looked[b.event_id] = ((await sportsdb("lookupevent.php", {"id": b.event_id})).get("events") or [None])[0]
+            except Exception:
+                looked[b.event_id] = None
+        e, result = looked[b.event_id], None
+        if e and (e.get("strStatus") or "") in FINISHED and e.get("intHomeScore") not in (None, "") \
+                and e.get("intAwayScore") not in (None, ""):
+            h, a = int(e["intHomeScore"]), int(e["intAwayScore"])
+            result = "1" if h > a else "2" if a > h else "X"
+        elif now > b.kickoff + 3 * 86400:
+            result = "void"
+        if result is None:
+            continue
+        if result == "void":
+            b.status, payout, xp = "void", b.amount, 0
+        elif result == b.pick:
+            b.status, payout, xp = "won", b.amount * b.odds, CFG["XP_BET_WIN"]
+        else:
+            b.status, payout, xp = "lost", 0, CFG["XP_BET_PLAY"]
+        await add_balance(db, b.uid, payout, xp)
+    await db.commit()
+
+async def settle_loop():
+    n = 0
+    while True:
+        try:
+            async with async_session_maker() as db:
+                await settle_duels(db)
+                if n % 12 == 0:
+                    await settle_bets(db)
+        except Exception as e:
+            print("settle error:", e)
+        n += 1
+        await asyncio.sleep(10)
+
+@app.get("/api/lessons")
+async def lessons(db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    u = await load_user(db, *who)
+    done = set((u.lessons or "").split(","))
+    return [{"id": l["id"], "emoji": l["emoji"], "title": l["title"], "text": l["text"], "q": l["q"],
+             "options": l["options"], "xp": l["xp"], "usdt": l["usdt"], "done": l["id"] in done} for l in LESSONS]
+
+@app.post("/api/lessons/complete")
+async def lesson_complete(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    l = LESSON_BY_ID.get(d.get("lesson_id"))
+    if not l:
+        raise HTTPException(404, "Урок не найден")
+    u = await load_user(db, who[0], who[1], lock=True)
+    done = [x for x in (u.lessons or "").split(",") if x]
+    correct = d.get("answer") == l["answer"]
+    reward = False
+    if correct and l["id"] not in done:
+        done.append(l["id"])
+        u.lessons = ",".join(done)
+        u.xp += l["xp"]
+        u.balance += l["usdt"]
+        reward = True
+    await db.commit()
+    return {"correct": correct, "explain": l["explain"], "rewarded": reward, "xp": l["xp"], "usdt": l["usdt"]}
 
 if __name__ == "__main__":
     uvicorn.run("bot:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
