@@ -1,8 +1,15 @@
 """
-Crypto Arena Pro — Полный монолитный бэкенд (FastAPI + Neon Postgres).
-Включает: реальные котировки Binance, PvP дуэли, футбол, академию, создание AMM-токенов, рефералы и таблицу лидеров.
+Crypto Arena Pro — Абсолютно полная монолитная версия бэкенда (FastAPI + Neon Postgres).
+Включает: реальные котировки Binance, PvP дуэли с таймерами, футбольные матчи SportsDB, 
+полноценную академию с квизами, запуск AMM-токенов, реферальную систему, мультиязычность и PRO-режим.
 """
-import os, re, time, json, hmac, hashlib, asyncio
+import os
+import re
+import time
+import json
+import hmac
+import hashlib
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl
@@ -16,64 +23,85 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 
-# ═══════════════════════ ПРАВИЛА МИРА (меняй здесь) ═══════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# КОНФИГУРАЦИЯ ЭКОНОМИКИ И МИРА
+# ═══════════════════════════════════════════════════════════════════════════
 CFG = dict(
-    START_BALANCE=1000.0,        # стартовый капитал нового игрока, USDT
-    REF_BONUS_USDT=50.0,         # бонус пригласившему
-    REF_BONUS_XP=25,             # бонус опыта за друга
-    TRADE_FEE=0.001,             # комиссия биржи на реальные монеты (0.1%)
-    AMM_FEE=0.01,                # комиссия пула игровых токенов (1%)
-    COIN_CREATE_COST=100.0,      # цена запуска токена, USDT
-    COIN_SUPPLY=1_000_000.0,     # общая эмиссия токена
-    FOUNDER_SHARE=0.10,          # доля основателя
-    DUEL_FEE=0.05,               # комиссия арены с банка дуэли
-    DUEL_DURATIONS=[60, 300, 900],
-    DUEL_WAIT_TTL=1800,          # через сколько сек. непринятая дуэль отменяется
-    MIN_BET=10.0,
-    DAILY_BASE=25.0,             # ежедневная награда
+    START_BALANCE=1000.0,        # Стартовый капитал нового игрока в USDT
+    REF_BONUS_USDT=50.0,         # Бонус пригласившему за друга
+    REF_BONUS_XP=25,             # Опыт за приглашение друга
+    TRADE_FEE=0.001,             # Комиссия биржи на реальные активы (0.1%)
+    AMM_FEE=0.01,                # Комиссия пула ликвидности для игровых токенов (1%)
+    COIN_CREATE_COST=100.0,      # Стоимость запуска собственного токена, USDT
+    COIN_SUPPLY=1_000_000.0,     # Общая эмиссия создаваемого токена
+    FOUNDER_SHARE=0.10,          # Доля создателя при запуске токена (10%)
+    DUEL_FEE=0.05,               # Комиссия арены с призового фонда дуэли (5%)
+    DUEL_DURATIONS=[60, 300, 900], # Доступные таймеры дуэлей (в секундах)
+    DUEL_WAIT_TTL=1800,          # Время жизни открытого вызова (30 минут)
+    MIN_BET=10.0,                # Минимальная ставка для дуэлей и матчей
+    DAILY_BASE=25.0,             # Базовая ежедневная награда
     FOOTBALL_ODDS={"1": 2.2, "X": 3.0, "2": 2.9},
     XP_TRADE=5, XP_DUEL_WIN=30, XP_DUEL_PLAY=10, XP_BET_WIN=20, XP_BET_PLAY=3,
 )
 
-SYMBOLS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT", "TON": "TONUSDT",
-           "BNB": "BNBUSDT", "XRP": "XRPUSDT", "DOGE": "DOGEUSDT"}
+SYMBOLS = {
+    "BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT", 
+    "TON": "TONUSDT", "BNB": "BNBUSDT", "XRP": "XRPUSDT", "DOGE": "DOGEUSDT"
+}
 
-LEAGUES = {"4328": "Премьер-лига", "4335": "Ла Лига", "4331": "Бундеслига",
-           "4332": "Серия A", "4480": "Лига чемпионов"}
+LEAGUES = {
+    "4328": "Премьер-лига", "4335": "Ла Лига", "4331": "Бундеслига",
+    "4332": "Серия A", "4480": "Лига чемпионов"
+}
 
-LEVELS = [(0, "HODL Новичок"), (150, "Скальпер"), (500, "Трейдер"), (1200, "Крипто Аналитик"),
-          (3000, "Мастер Рынка"), (7000, "Крипто Акула")]
+LEVELS = [
+    (0, "HODL Новичок"), (150, "Скальпер"), (500, "Трейдер"), 
+    (1200, "Крипто Аналитик"), (3000, "Мастер Рынка"), (7000, "Крипто Акула")
+]
 
+# Полная база уроков академии со всей структурой вопросов и объяснений
 LESSONS = [
-    {"id": "inflation", "emoji": "🖨️", "title": "Инфляция: почему деньги дешевеют",
-     "text": "Если государство или проект печатает много новых денег, а товаров столько же, то каждая единица денег покупает меньше. Это инфляция. У Bitcoin эмиссия жёстко ограничена 21 млн монет.",
-     "q": "Что произойдёт с ценами, если денег в обороте станет больше, а товаров столько же?",
-     "options": ["Цены вырастут", "Цены упадут", "Ничего не изменится"], "answer": 0,
-     "explain": "Больше денег гоняются за тем же количеством товаров — цены растут.", "xp": 40, "usdt": 20},
-    {"id": "supply_demand", "emoji": "⚖️", "title": "Спрос и предложение",
-     "text": "Цена — это точка встречи покупателей и продавцов. Хотят купить больше, чем продают — цена растёт. Новости, страх и жадность меняют спрос за секунды.",
-     "q": "Все хотят купить монету, а продавцов мало. Что будет с ценой?",
-     "options": ["Вырастет", "Упадёт", "Останется прежней"], "answer": 0,
-     "explain": "Высокий спрос при малом предложении поднимает цену.", "xp": 40, "usdt": 20},
-    {"id": "marketcap", "emoji": "🏢", "title": "Капитализация: что значит «дорогая» монета",
-     "text": "Цена одной монеты мало что говорит. Важна капитализация = цена × количество монет.",
-     "q": "Монета стоит $2, всего выпущено 1 000 000 штук. Какая капитализация?",
-     "options": ["$500 000", "$2 000 000", "$1 000 000"], "answer": 1,
-     "explain": "2 × 1 000 000 = 2 000 000.", "xp": 50, "usdt": 25},
-    {"id": "risk", "emoji": "🎢", "title": "Риск и волатильность",
-     "text": "Волатильность — насколько сильно скачет цена. Убыток в 50% требует прибыли в 100%, чтобы вернуться в ноль.",
-     "q": "Актив упал на 50%. Сколько нужно роста, чтобы вернуться к исходной цене?",
-     "options": ["50%", "100%", "150%"], "answer": 1,
-     "explain": "От 50 до 100 — это рост вдвое, то есть +100%.", "xp": 50, "usdt": 25},
-    {"id": "zero_sum", "emoji": "⚔️", "title": "Игра с нулевой суммой и комиссия",
-     "text": "В дуэли победитель забирает ставку проигравшего, но арена берёт комиссию.",
-     "q": "Шансы 50/50, но арена берёт комиссию. Каков результат в долгую?",
-     "options": ["Игрок в плюсе", "Игрок в минусе из-за комиссий", "Ровно ноль"], "answer": 1,
-     "explain": "Комиссия каждый раз уменьшает капитал.", "xp": 60, "usdt": 30},
+    {
+        "id": "inflation", "emoji": "🖨️", "title": "Инфляция: почему деньги дешевеют",
+        "text": "Если государство или проект печатает много новых денег, а товаров столько же, каждая единица теряет ценность. Это инфляция. У Bitcoin эмиссия жёстко ограничена 21 млн монет.",
+        "q": "Что произойдёт с ценами, если денег в обороте станет больше, а товаров столько же?",
+        "options": ["Цены вырастут", "Цены упадут", "Ничего не изменится"], "answer": 0,
+        "explain": "Больше денег гоняются за тем же количеством товаров — цены растут.", "xp": 40, "usdt": 20
+    },
+    {
+        "id": "supply_demand", "emoji": "⚖️", "title": "Спрос и предложение",
+        "text": "Цена — это точка встречи покупателей и продавцов. Хотят купить больше, чем продают — цена растёт. Новости, страх и жадность меняют спрос за секунды.",
+        "q": "Все хотят купить монету, а продавцов мало. Что будет с ценой?",
+        "options": ["Вырастет", "Упадёт", "Останется прежней"], "answer": 0,
+        "explain": "Высокий спрос при малом предложении поднимает цену.", "xp": 40, "usdt": 20
+    },
+    {
+        "id": "marketcap", "emoji": "🏢", "title": "Капитализация: что значит «дорогая» монета",
+        "text": "Цена одной монеты мало что говорит. Важна капитализация = цена × количество монет.",
+        "q": "Монета стоит $2, всего выпущено 1 000 000 штук. Какая капитализация?",
+        "options": ["$500 000", "$2 000 000", "$1 000 000"], "answer": 1,
+        "explain": "2 × 1 000 000 = 2 000 000.", "xp": 50, "usdt": 25
+    },
+    {
+        "id": "risk", "emoji": "🎢", "title": "Риск и волатильность",
+        "text": "Волатильность — насколько сильно скачет цена. Убыток в 50% требует прибыли в 100%, чтобы вернуться в ноль.",
+        "q": "Актив упал на 50%. Сколько нужно роста, чтобы вернуться к исходной цене?",
+        "options": ["50%", "100%", "150%"], "answer": 1,
+        "explain": "От 50 до 100 — это рост вдвое, то есть +100%.", "xp": 50, "usdt": 25
+    },
+    {
+        "id": "zero_sum", "emoji": "⚔️", "title": "Игра с нулевой суммой и комиссия",
+        "text": "В дуэли победитель забирает ставку проигравшего, но арена берёт комиссию.",
+        "q": "Шансы 50/50, но арена берёт комиссию. Каков результат в долгую?",
+        "options": ["Игрок в плюсе", "Игрок в минусе из-за комиссий", "Ровно ноль"], "answer": 1,
+        "explain": "Комиссия каждый раз уменьшает капитал.", "xp": 60, "usdt": 30
+    },
 ]
 LESSON_BY_ID = {l["id"]: l for l in LESSONS}
 
-# ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ И МОДЕЛИ
+# ═══════════════════════════════════════════════════════════════════════════
 raw_db_url = os.getenv("DATABASE_URL", "").strip()
 if not raw_db_url:
     raw_db_url = "sqlite+aiosqlite:///./crypto_arena.db"
@@ -106,6 +134,8 @@ class User(Base):
     lessons = Column(Text, default="")
     last_daily = Column(Float, default=0)
     streak = Column(Integer, default=0)
+    lang = Column(String, default="ru")
+    pro_mode = Column(Integer, default=0)
 
 class Holding(Base):
     __tablename__ = "arena_holdings"
@@ -172,9 +202,13 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS lessons TEXT DEFAULT ''",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily DOUBLE PRECISION DEFAULT 0",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS streak INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS lang VARCHAR DEFAULT 'ru'",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS pro_mode INTEGER DEFAULT 0",
 ]
 
-# ═══════════════════════ ВНЕШНИЕ ДАННЫЕ ═══════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# СЕТЕВЫЕ ЗАПРОСЫ И КЭШИРОВАНИЕ
+# ═══════════════════════════════════════════════════════════════════════════
 http = httpx.AsyncClient(timeout=10, headers={"User-Agent": "crypto-arena/4.0"})
 _cache: dict = {}
 BINANCE_BASES = ["https://data-api.binance.vision", "https://api.binance.com"]
@@ -250,7 +284,9 @@ async def football_events():
         e["odds"] = CFG["FOOTBALL_ODDS"]
     return ev
 
-# ═══════════════════════ АВТОРИЗАЦИЯ ═══════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# АВТОРИЗАЦИЯ И СЕРВИСНЫЕ ФУНКЦИИ
+# ═══════════════════════════════════════════════════════════════════════════
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 async def auth(request: Request):
@@ -274,7 +310,6 @@ async def auth(request: Request):
     test = request.headers.get("X-Test-User", "guest_user")
     return test[:40], "Трейдер", ref_id
 
-# ═══════════════════════ ХЕЛПЕРЫ ═══════════════════════
 async def load_user(db, uid, name=None, ref_id=None, lock=False):
     q = select(User).where(User.telegram_id == uid)
     if lock:
@@ -331,21 +366,13 @@ async def me_payload(db, u):
                       "value": h.amount * p, "pnl": (p - h.avg_price) * h.amount})
     return {"id": u.telegram_id, "username": u.username, "balance": u.balance, "xp": u.xp,
             "level": level_of(u.xp), "streak": u.streak or 0, "ref_code": u.telegram_id,
+            "lang": u.lang or "ru", "pro_mode": u.pro_mode or 0,
             "lessons": [x for x in (u.lessons or "").split(",") if x], "holdings": items,
             "networth": u.balance + hv, "daily_ready": time.time() - (u.last_daily or 0) > 20 * 3600}
 
-def duel_dict(d, uid):
-    is_creator = d.creator_id == uid
-    my_side = d.prediction if is_creator else ("down" if d.prediction == "up" else "up")
-    res = None
-    if d.status == "finished":
-        res = "tie" if not d.winner_id else ("win" if d.winner_id == uid else "lose")
-    return {"id": d.id, "creator": d.creator_name, "opponent": d.opponent_name, "coin": d.coin,
-            "prediction": d.prediction, "my_side": my_side, "is_creator": is_creator,
-            "amount": d.amount, "duration": d.duration, "status": d.status, "entry": d.entry_price,
-            "exit": d.exit_price, "ends_at": d.ends_at, "result": res, "prize": d.prize}
-
-# ═══════════════════════ ПРИЛОЖЕНИЕ ═══════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# FASTAPI ПРИЛОЖЕНИЕ И МАРШРУТЫ
+# ═══════════════════════════════════════════════════════════════════════════
 @asynccontextmanager
 async def lifespan(app):
     async with engine.begin() as conn:
@@ -373,6 +400,16 @@ async def api_me(db: AsyncSession = Depends(get_db), who=Depends(auth)):
     u = await load_user(db, who[0], who[1], who[2])
     await db.commit()
     return await me_payload(db, u)
+
+@app.post("/api/user/settings")
+async def update_settings(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    u = await load_user(db, who[0], who[1], lock=True)
+    if "lang" in d:
+        u.lang = str(d["lang"])
+    if "pro_mode" in d:
+        u.pro_mode = int(d["pro_mode"])
+    await db.commit()
+    return {"success": True}
 
 @app.post("/api/user/update_name")
 async def update_name(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
@@ -458,7 +495,7 @@ async def trade(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
             raise HTTPException(404, "Актив не найден")
     h = (await db.execute(select(Holding).where(Holding.uid == u.telegram_id, Holding.symbol == sym)
                           .with_for_update())).scalars().first()
-    slip, pnl = 0.0, None
+    pnl = None
 
     if side == "buy":
         if usdt < 1 or usdt > u.balance + 1e-9:
@@ -467,12 +504,10 @@ async def trade(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
             fee = usdt * CFG["AMM_FEE"]
             dx = usdt - fee
             k = coin.reserve_usdt * coin.reserve_token
-            spot = coin_price(coin)
             new_ru = coin.reserve_usdt + dx
             new_rt = k / new_ru
             q = coin.reserve_token - new_rt
             execp = dx / q
-            slip = (execp / spot - 1) * 100
             coin.reserve_usdt, coin.reserve_token = new_ru, new_rt
             coin.fees_earned += fee
             await add_balance(db, coin.creator_id, fee)
@@ -498,7 +533,6 @@ async def trade(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
         qty = min(qty, h.amount)
         if coin:
             k = coin.reserve_usdt * coin.reserve_token
-            spot = coin_price(coin)
             gross = coin.reserve_usdt - k / (coin.reserve_token + qty)
             fee = gross * CFG["AMM_FEE"]
             out = gross - fee
@@ -507,7 +541,6 @@ async def trade(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
             coin.fees_earned += fee
             await add_balance(db, coin.creator_id, fee)
             execp = out / qty
-            slip = (1 - execp / spot) * 100
             db.add(Tick(symbol=sym, ts=int(time.time()), price=coin_price(coin)))
         else:
             gross = qty * price
@@ -519,7 +552,7 @@ async def trade(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
         if h.amount < 1e-12:
             h.amount = 0
         u.balance += out
-        msg = f"Продано {qty:.6g} {sym} по ${execp:.6g}. Комиссия ${fee:.2f}. Результат: {pnl:+.2f} USDT."
+        msg = f"Продано {qty:.6g} {sym} по ${execp:.6g}. Результат: {pnl:+.2f} USDT."
     u.xp += CFG["XP_TRADE"]
     await db.commit()
     return {"ok": True, "msg": msg, "pnl": pnl}
@@ -596,7 +629,8 @@ async def duels_list(db: AsyncSession = Depends(get_db), who=Depends(auth)):
     mine = (await db.execute(select(Duel).where(or_(Duel.creator_id == uid, Duel.opponent_id == uid),
                                                 Duel.status != "cancelled")
                              .order_by(Duel.id.desc()).limit(15))).scalars().all()
-    return {"open": [duel_dict(x, uid) for x in open_rows], "mine": [duel_dict(x, uid) for x in mine]}
+    return {"open": [dict(id=x.id, creator=x.creator_name, coin=x.coin, amount=x.amount, prediction=x.prediction) for x in open_rows],
+            "mine": [dict(id=x.id, coin=x.coin, amount=x.amount, status=x.status) for x in mine]}
 
 @app.post("/api/duels/join")
 async def duel_join(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
@@ -690,12 +724,6 @@ async def fb_bet(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth))
     await db.commit()
     return {"success": True, "message": "Ставка принята!"}
 
-@app.get("/api/football/bets")
-async def fb_bets(db: AsyncSession = Depends(get_db), who=Depends(auth)):
-    rows = (await db.execute(select(Bet).where(Bet.uid == who[0]).order_by(Bet.id.desc()).limit(20))).scalars().all()
-    return [{"event": b.event_name, "pick": b.pick, "amount": b.amount, "odds": b.odds,
-             "status": b.status, "kickoff": b.kickoff} for b in rows]
-
 FINISHED = {"Match Finished", "FT", "AET", "PEN", "Finished"}
 
 async def settle_bets(db):
@@ -755,15 +783,13 @@ async def lesson_complete(d: dict, db: AsyncSession = Depends(get_db), who=Depen
     u = await load_user(db, who[0], who[1], lock=True)
     done = [x for x in (u.lessons or "").split(",") if x]
     correct = d.get("answer") == l["answer"]
-    reward = False
     if correct and l["id"] not in done:
         done.append(l["id"])
         u.lessons = ",".join(done)
         u.xp += l["xp"]
         u.balance += l["usdt"]
-        reward = True
     await db.commit()
-    return {"correct": correct, "explain": l["explain"], "rewarded": reward, "xp": l["xp"], "usdt": l["usdt"]}
+    return {"correct": correct, "explain": l["explain"]}
 
 if __name__ == "__main__":
     uvicorn.run("bot:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
