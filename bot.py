@@ -43,7 +43,7 @@ engine = create_async_engine(raw_db_url + ("?prepared_statement_cache_size=0" if
 async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
 
-# Функция получения сессии БД (исправляет ошибку NameError)
+# Функция получения сессии БД
 async def get_db():
     async with async_session_maker() as session:
         yield session
@@ -116,19 +116,22 @@ async def load_user(db, uid, name=None):
 
 @asynccontextmanager
 async def lifespan(app):
+    # 1. Сначала гарантированно создаем все таблицы в БД
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        async with async_session_maker() as session:
-            count = (await session.execute(select(Product))).scalars().first()
-            if not count:
-                initial_products = [
-                    Product(title="Nike Air Jordan 4 Retro 'Bred Reimagined'", brand="Nike", price=14500, old_price=17000, image="https://images.unsplash.com/photo-1584735935682-2f2b69dff9d2?w=600", sizes="40,41,42,43,44,45", category="drops", description="Легендарная кожаная модель в классической расцветке."),
-                    Product(title="Adidas Yeezy Boost 350 V2 'Onyx'", brand="Adidas", price=12000, old_price=14000, image="https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=600", sizes="41,42,43,44", category="lifestyle", description="Максимальный комфорт с технологией Primeknit и Boost."),
-                    Product(title="New Balance 9060 'Sea Salt'", brand="New Balance", price=13500, old_price=15500, image="https://images.unsplash.com/photo-1539185441755-769473a23570?w=600", sizes="38,39,40,41,42,43", category="lifestyle", description="Футуристичный дизайн и премиальные материалы."),
-                    Product(title="Nike Dunk Low 'Panda'", brand="Nike", price=10500, old_price=12500, image="https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?w=600", sizes="39,40,41,42,43,44", category="drops", description="Самая универсальная и узнаваемая расцветка.")
-                ]
-                session.add_all(initial_products)
-                await session.commit()
+    
+    # 2. Затем добавляем стартовые товары, если таблица пустая
+    async with async_session_maker() as session:
+        count = (await session.execute(select(Product))).scalars().first()
+        if not count:
+            initial_products = [
+                Product(title="Nike Air Jordan 4 Retro 'Bred Reimagined'", brand="Nike", price=14500, old_price=17000, image="https://images.unsplash.com/photo-1584735935682-2f2b69dff9d2?w=600", sizes="40,41,42,43,44,45", category="drops", description="Легендарная кожаная модель в классической расцветке."),
+                Product(title="Adidas Yeezy Boost 350 V2 'Onyx'", brand="Adidas", price=12000, old_price=14000, image="https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=600", sizes="41,42,43,44", category="lifestyle", description="Максимальный комфорт с технологией Primeknit и Boost."),
+                Product(title="New Balance 9060 'Sea Salt'", brand="New Balance", price=13500, old_price=15500, image="https://images.unsplash.com/photo-1539185441755-769473a23570?w=600", sizes="38,39,40,41,42,43", category="lifestyle", description="Футуристичный дизайн и премиальные материалы."),
+                Product(title="Nike Dunk Low 'Panda'", brand="Nike", price=10500, old_price=12500, image="https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?w=600", sizes="39,40,41,42,43,44", category="drops", description="Самая универсальная и узнаваемая расцветка.")
+            ]
+            session.add_all(initial_products)
+            await session.commit()
     yield
 
 app = FastAPI(title="Sneaker Drop Bishkek Ultimate", lifespan=lifespan)
