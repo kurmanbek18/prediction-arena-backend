@@ -43,6 +43,11 @@ engine = create_async_engine(raw_db_url + ("?prepared_statement_cache_size=0" if
 async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
 
+# Функция получения сессии БД (исправляет ошибку NameError)
+async def get_db():
+    async with async_session_maker() as session:
+        yield session
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
