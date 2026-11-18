@@ -6,94 +6,125 @@
 <title>Sneaker Drop · Бишкек</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-:root{--ink:#0f1012;--bg:#ecedef;--card:#fff;--line:#dcdde0;--mut:#6b6f76;--sig:#ff4a1c;--ok:#16a34a}
+:root{--ink:#111;--bg:#fff;--soft:#f5f5f5;--line:#e5e5e5;--mut:#707072;--sale:#d43f21;--ok:#1a8f4c}
 *{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
-body{background:var(--bg);color:var(--ink);font:15px/1.4 'Archivo',-apple-system,'Segoe UI',sans-serif;padding-bottom:84px}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 'Inter',-apple-system,'Segoe UI',Roboto,sans-serif;padding-bottom:78px;-webkit-font-smoothing:antialiased}
 button{font:inherit;cursor:pointer;border:0;background:none;color:inherit}
-.hide{display:none!important}
-header{position:sticky;top:0;z-index:30;background:var(--ink);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
-.logo{font-stretch:125%;font-weight:800;letter-spacing:.02em;font-size:17px}
-.sub{font-size:11px;color:#a8abb2;margin-top:1px}
-.cartpill{background:var(--sig);color:#fff;font-weight:700;border-radius:99px;padding:6px 13px;font-size:13px}
-main{max-width:480px;margin:0 auto;padding:14px 14px}
-h2{font-stretch:115%;font-weight:800;font-size:22px;margin:4px 0 12px}
-.inp{width:100%;background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:12px 13px;font:inherit;color:var(--ink);outline:none}
-.inp:focus{border-color:var(--ink)}
-textarea.inp{min-height:76px;resize:vertical}
-label{display:block;font-size:12px;font-weight:600;color:var(--mut);margin:10px 0 4px}
-.chips{display:flex;gap:8px;overflow-x:auto;padding:10px 0 12px;scrollbar-width:none}
-.chip{flex:none;padding:8px 15px;border-radius:99px;background:#fff;border:1.5px solid var(--line);font-weight:600;font-size:13px}
-.chip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.pc{background:var(--card);border-radius:16px;overflow:hidden;text-align:left;display:block;width:100%}
-.pc .ph{position:relative;aspect-ratio:1/1;background:#e4e5e8}
-.pc img,.sheet .big{width:100%;height:100%;object-fit:cover;display:block}
-.pc .b{padding:10px 11px 12px}
-.br{font-size:11px;color:var(--mut);font-weight:600}
-.tt{font-weight:700;font-size:14px;line-height:1.25;margin:2px 0 6px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:35px}
-.pr{font-weight:800;font-size:15px}.old{color:var(--mut);text-decoration:line-through;font-size:12px;margin-left:6px;font-weight:500}
-.tag{position:absolute;left:8px;top:8px;background:var(--sig);color:#fff;font-weight:800;font-size:11px;padding:3px 8px;border-radius:8px}
-.btn{display:block;width:100%;padding:14px;border-radius:13px;font-weight:700;text-align:center;background:var(--ink);color:#fff}
-.btn.sig{background:var(--sig)}.btn.wa{background:#25a244}.btn.ghost{background:#fff;color:var(--ink);border:1.5px solid var(--line)}
-.btn.sm{padding:9px 12px;font-size:13px;border-radius:10px;width:auto;display:inline-block}
-.btn:disabled{opacity:.5}
-.card{background:#fff;border-radius:16px;padding:14px;margin-bottom:10px}
-.row{display:flex;gap:10px;align-items:center}.sp{justify-content:space-between}
-.thumb{width:64px;height:64px;border-radius:12px;object-fit:cover;background:#e4e5e8;flex:none}
-.qty{display:flex;align-items:center;gap:2px;background:var(--bg);border-radius:10px}
-.qty button{width:32px;height:32px;font-size:18px;font-weight:700}.qty span{min-width:22px;text-align:center;font-weight:700}
-.sizes{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 16px}
-.sz{min-width:50px;padding:10px 12px;border-radius:11px;border:1.5px solid var(--line);font-weight:700;background:#fff}
-.sz.on{background:var(--ink);color:#fff;border-color:var(--ink)}
-.badge{display:inline-block;font-size:12px;font-weight:700;padding:4px 10px;border-radius:99px;color:#fff}
-.muted{color:var(--mut);font-size:13px}.empty{text-align:center;color:var(--mut);padding:40px 10px}
-nav{position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);display:flex;padding:6px 6px calc(6px + env(safe-area-inset-bottom))}
-nav button{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;font-size:11px;font-weight:600;color:var(--mut);padding:5px 0}
-nav button i{font-style:normal;font-size:20px}nav button.on{color:var(--ink)}nav button.on i{filter:none}
-.ov{position:fixed;inset:0;background:rgba(15,16,18,.55);z-index:60;display:flex;align-items:flex-end;justify-content:center}
-.sheet{background:var(--bg);width:100%;max-width:480px;max-height:92vh;overflow:auto;border-radius:22px 22px 0 0;padding:16px 16px calc(20px + env(safe-area-inset-bottom));animation:up .22s ease-out}
-@keyframes up{from{transform:translateY(40px);opacity:0}to{transform:none;opacity:1}}
-.sheet .big{border-radius:16px;aspect-ratio:1/1;margin-bottom:12px}
-.x{float:right;width:34px;height:34px;border-radius:50%;background:#fff;font-size:16px;font-weight:700}
-#toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 16px;border-radius:12px;font-weight:600;font-size:14px;z-index:90;max-width:90%;text-align:center;opacity:0;pointer-events:none;transition:.2s}
-#toast.show{opacity:1}
-.steps{counter-reset:s}.steps li{list-style:none;position:relative;padding-left:34px;margin:12px 0}
-.steps li:before{counter-increment:s;content:counter(s);position:absolute;left:0;top:0;width:24px;height:24px;border-radius:50%;background:var(--ink);color:#fff;font-weight:700;font-size:13px;display:grid;place-items:center}
-.qr{width:200px;height:200px;object-fit:contain;background:#fff;border-radius:14px;display:block;margin:10px auto}
-.sk{background:linear-gradient(90deg,#e4e5e8,#f1f2f4,#e4e5e8);background-size:200%;animation:sh 1.2s infinite;border-radius:16px;aspect-ratio:3/4}
-@keyframes sh{to{background-position:-200% 0}}
-.tabs{display:flex;background:#fff;border-radius:12px;padding:4px;margin-bottom:12px}
-.tabs button{flex:1;padding:9px;border-radius:9px;font-weight:700;font-size:13px;color:var(--mut)}.tabs button.on{background:var(--ink);color:#fff}
-.pv{width:100%;max-height:200px;object-fit:contain;border-radius:12px;background:#fff;margin-top:8px}
+a{color:inherit}.hide{display:none!important}
+svg{display:block}
+header{position:sticky;top:0;z-index:30;background:#fff;padding:12px 16px 10px;border-bottom:1px solid var(--line)}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.logo{font-weight:800;font-size:19px;letter-spacing:.04em}
+.ib{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--soft)}
+.search{display:flex;align-items:center;gap:8px;background:var(--soft);border-radius:999px;padding:0 14px;color:var(--mut)}
+.search input{flex:1;border:0;background:none;padding:11px 0;font:inherit;color:var(--ink);outline:none;min-width:0}
+main{max-width:520px;margin:0 auto;padding:0 16px}
+h2{font-weight:700;font-size:22px;letter-spacing:-.01em;margin:18px 0 14px}
+h3{font-size:16px;font-weight:700}
+.trust{display:flex;gap:16px;overflow-x:auto;padding:12px 0;font-size:12px;color:var(--mut);white-space:nowrap;scrollbar-width:none}
+.trust span{display:flex;gap:5px;align-items:center}
+.tabs{display:flex;gap:22px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:none;margin:0 -16px;padding:0 16px}
+.tabs button{flex:none;padding:10px 0;font-weight:600;color:var(--mut);border-bottom:2px solid transparent;font-size:14px}
+.tabs button.on{color:var(--ink);border-color:var(--ink)}
+.tb{display:flex;justify-content:space-between;align-items:center;padding:12px 0;gap:8px}
+.sel{border:1px solid var(--line);border-radius:999px;padding:7px 12px;font:inherit;font-size:13px;background:#fff;color:var(--ink);max-width:48%}
+.muted{color:var(--mut);font-size:13px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px 10px}
+.pc{cursor:pointer}
+.ph{position:relative;aspect-ratio:4/5;background:var(--soft);border-radius:6px;overflow:hidden}
+.ph img{width:100%;height:100%;object-fit:cover;display:block}
+.bd{position:absolute;left:8px;bottom:8px;background:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px}
+.fv{position:absolute;right:6px;top:6px;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.9)}
+.fv.on{color:var(--sale)}
+.pc .b{padding:8px 2px 0}.tt{font-weight:600;font-size:14px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.br{font-size:13px;color:var(--mut);margin:1px 0 4px}
+.pr{font-weight:700;font-size:15px}.pr.sale{color:var(--sale)}.old{color:var(--mut);text-decoration:line-through;font-size:13px;margin-left:6px}
+.pill{display:block;width:100%;padding:15px;border-radius:999px;font-weight:600;text-align:center;background:var(--ink);color:#fff;font-size:15px}
+.pill.out{background:#fff;color:var(--ink);border:1px solid #bbb}.pill.wa{background:#1a8f4c}.pill:disabled{opacity:.5}
+.btn{display:inline-block;padding:9px 14px;border-radius:999px;font-weight:600;font-size:13px;background:var(--ink);color:#fff}
+.btn.out{background:#fff;color:var(--ink);border:1px solid #bbb}.btn.red{color:var(--sale);border-color:#e8b4a8;background:#fff}.btn.wa{background:#1a8f4c}
+.row{display:flex;gap:10px;align-items:center}.sp{justify-content:space-between}.wrap{flex-wrap:wrap}
+.box{background:var(--soft);border-radius:10px;padding:14px;margin-bottom:12px}
+.line{display:flex;gap:12px;padding:14px 0;border-bottom:1px solid var(--line)}
+.thumb{width:84px;height:84px;border-radius:6px;object-fit:cover;background:var(--soft);flex:none}
+.qty{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px}
+.qty button{width:34px;height:34px;font-size:18px}.qty span{min-width:22px;text-align:center;font-weight:600}
+.inp{width:100%;background:#fff;border:1px solid #cfcfcf;border-radius:10px;padding:13px;font:inherit;color:var(--ink);outline:none}
+.inp:focus{border-color:var(--ink)}textarea.inp{min-height:84px;resize:vertical}
+label.l{display:block;font-size:12px;font-weight:600;color:var(--mut);margin:12px 0 5px}
+.seg{display:flex;background:var(--soft);border-radius:999px;padding:3px;margin-bottom:4px}
+.seg button{flex:1;padding:10px;border-radius:999px;font-weight:600;font-size:14px;color:var(--mut)}.seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.empty{text-align:center;color:var(--mut);padding:56px 16px}.empty b{display:block;color:var(--ink);font-size:17px;margin:10px 0 4px}
+nav{position:fixed;bottom:0;left:0;right:0;z-index:40;background:#fff;border-top:1px solid var(--line);display:flex;padding:6px 4px calc(6px + env(safe-area-inset-bottom))}
+nav button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;font-weight:600;color:#9a9a9c;padding:4px 0;position:relative}
+nav button.on{color:var(--ink)}
+.nb{position:absolute;top:0;left:calc(50% + 6px);background:var(--sale);color:#fff;font-size:10px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:grid;place-items:center;padding:0 4px}
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:60;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:#fff;width:100%;max-width:520px;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;padding:18px 16px calc(20px + env(safe-area-inset-bottom));animation:up .2s ease-out}
+.sheet.full{height:100%;max-height:100%;border-radius:0;padding:0}
+@keyframes up{from{transform:translateY(30px);opacity:0}to{transform:none;opacity:1}}
+.gal{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;background:var(--soft)}
+.gal::-webkit-scrollbar,.tabs::-webkit-scrollbar{display:none}
+.gal img{flex:none;width:100%;aspect-ratio:1/1;object-fit:cover;scroll-snap-align:center}
+.gw{position:relative}.gw .cnt{position:absolute;right:12px;bottom:12px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;font-weight:600;padding:3px 9px;border-radius:99px}
+.gw .ib{position:absolute;top:12px;background:rgba(255,255,255,.92)}
+.pb{padding:16px}
+.sizes{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0 6px}
+.sz{padding:12px 0;border:1px solid #cfcfcf;border-radius:8px;font-weight:600;text-align:center}.sz.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.bar{position:sticky;bottom:0;background:#fff;padding:12px 16px calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
+details{border-top:1px solid var(--line);padding:14px 0}details:last-of-type{border-bottom:1px solid var(--line)}summary{font-weight:600;cursor:pointer;list-style:none;display:flex;justify-content:space-between}
+summary::after{content:'+';font-size:18px}details[open] summary::after{content:'−'}
+.rail{display:flex;gap:10px;overflow-x:auto;scrollbar-width:none;margin:0 -16px;padding:0 16px}.rail .pc{flex:none;width:140px}
+#toast{position:fixed;left:50%;bottom:92px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:11px 18px;border-radius:999px;font-weight:500;font-size:14px;z-index:90;max-width:90%;text-align:center;opacity:0;pointer-events:none;transition:.2s}#toast.show{opacity:1}
+.stat{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}.stat div{background:var(--soft);border-radius:10px;padding:12px}.stat b{display:block;font-size:18px}.stat span{font-size:12px;color:var(--mut)}
+.badge{display:inline-block;font-size:12px;font-weight:600;padding:3px 10px;border-radius:99px;color:#fff}
+.prog{display:flex;gap:4px;margin:12px 0 6px}.prog i{flex:1;height:3px;border-radius:2px;background:var(--line)}.prog i.on{background:var(--ink)}
+.qr{width:210px;height:210px;object-fit:contain;display:block;margin:12px auto;border:1px solid var(--line);border-radius:12px}
+.sk{background:linear-gradient(90deg,#eee,#f7f7f7,#eee);background-size:200%;animation:sh 1.2s infinite;border-radius:6px;aspect-ratio:4/5}@keyframes sh{to{background-position:-200% 0}}
+.ptabs{display:flex;border-bottom:1px solid var(--line);margin:0 -16px 14px;padding:0 16px;gap:22px;overflow-x:auto}.ptabs button{padding:12px 0;font-weight:600;color:var(--mut);border-bottom:2px solid transparent;flex:none}.ptabs button.on{color:var(--ink);border-color:var(--ink)}
+.ph-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}.ph-grid div{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:var(--soft)}.ph-grid img{width:100%;height:100%;object-fit:cover}
+.ph-grid .x{position:absolute;top:4px;right:4px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.7);color:#fff;display:grid;place-items:center;font-size:12px}
+.ph-grid .m{position:absolute;left:4px;bottom:4px;font-size:10px;font-weight:700;background:#fff;border-radius:4px;padding:2px 6px}
+ol.steps{counter-reset:s;padding:0}ol.steps li{list-style:none;position:relative;padding-left:36px;margin:16px 0}
+ol.steps li:before{counter-increment:s;content:counter(s);position:absolute;left:0;top:0;width:24px;height:24px;border-radius:50%;border:1.5px solid var(--ink);font-weight:700;font-size:12px;display:grid;place-items:center}
 </style>
 </head>
 <body>
-
 <header>
-  <div><div class="logo" id="shopname">SNEAKER DROP</div><div class="sub">Кроссовки с доставкой по Бишкеку</div></div>
-  <button class="cartpill" id="pill" onclick="show('cart')">0</button>
+  <div class="top"><div class="logo" id="shopname">SNEAKER DROP</div>
+    <button class="ib hide" id="btn-admin" onclick="show('admin')" aria-label="Админка"></button></div>
+  <div class="search" id="searchbar"><span id="ic-search"></span><input id="q" placeholder="Поиск: Nike, Jordan, Yeezy…" oninput="S.q=this.value;renderCatalog()"></div>
 </header>
 
 <main>
   <section id="v-catalog">
-    <input id="q" class="inp" placeholder="Поиск: Nike, Jordan, 42…" oninput="S.q=this.value;renderCatalog()">
-    <div class="chips" id="chips"></div>
+    <div class="trust"><span id="t1"></span><span id="t2"></span><span id="t3"></span></div>
+    <div class="tabs" id="cats"></div>
+    <div class="tb"><span class="muted" id="count"></span>
+      <div class="row"><select class="sel" id="sizef" onchange="S.size=this.value;renderCatalog()"></select>
+      <select class="sel" onchange="S.sort=this.value;renderCatalog()"><option value="new">Новинки</option><option value="asc">Дешевле</option><option value="desc">Дороже</option><option value="sale">Со скидкой</option></select></div></div>
     <div class="grid" id="grid"></div>
   </section>
 
+  <section id="v-fav" class="hide"><h2>Избранное</h2><div class="grid" id="fav-grid"></div></section>
+
   <section id="v-cart" class="hide">
-    <h2>Корзина</h2>
-    <div id="cart-items"></div>
+    <h2>Корзина</h2><div id="cart-items"></div>
     <div id="checkout" class="hide">
-      <div class="card">
-        <div class="row sp"><b>Итого</b><b id="cart-total" style="font-size:19px"></b></div>
-        <label>Телефон (WhatsApp)</label><input id="o-phone" type="tel" class="inp" placeholder="+996 ___ ___ ___">
-        <label>Адрес доставки в Бишкеке</label><input id="o-addr" class="inp" placeholder="Район, улица, дом, кв.">
-        <label>Комментарий (необязательно)</label><input id="o-comm" class="inp" placeholder="Удобное время, пожелания">
+      <div class="box" style="margin-top:16px">
+        <div class="row sp"><span class="muted">Товары</span><b id="c-sub"></b></div>
+        <div class="row sp" style="margin-top:6px"><span class="muted">Доставка</span><span class="muted">уточнит менеджер</span></div>
+        <div class="row sp" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px"><b>Итого</b><b style="font-size:19px" id="c-total"></b></div>
       </div>
-      <button class="btn sig" id="o-btn" onclick="submitOrder()">Оформить заказ</button>
+      <h3>Получение</h3>
+      <div class="seg" style="margin-top:8px"><button id="d-delivery" class="on" onclick="setDel('delivery')">Доставка по Бишкеку</button><button id="d-pickup" onclick="setDel('pickup')">Самовывоз</button></div>
+      <label class="l">Телефон (WhatsApp)</label><input id="o-phone" type="tel" class="inp" placeholder="+996 ___ ___ ___">
+      <div id="addr-wrap"><label class="l">Адрес доставки</label><input id="o-addr" class="inp" placeholder="Район, улица, дом, квартира"></div>
+      <label class="l">Комментарий (необязательно)</label><input id="o-comm" class="inp" placeholder="Удобное время, пожелания">
+      <div style="height:16px"></div>
+      <button class="pill" id="o-btn" onclick="submitOrder()">Оформить заказ</button>
       <p class="muted" style="margin-top:10px;text-align:center">Оплата не списывается сейчас. Менеджер подтвердит наличие и размер и свяжется с вами.</p>
     </div>
   </section>
@@ -102,42 +133,52 @@ nav button i{font-style:normal;font-size:20px}nav button.on{color:var(--ink)}nav
 
   <section id="v-info" class="hide">
     <h2>Как мы работаем</h2>
-    <div class="card"><ol class="steps">
-      <li><b>Выбираете пару и размер</b><br><span class="muted">Оформляете заказ прямо здесь, это ни к чему не обязывает.</span></li>
-      <li><b>Подтверждаем наличие</b><br><span class="muted">Менеджер пишет вам в WhatsApp и сверяет модель и размер.</span></li>
+    <ol class="steps">
+      <li><b>Выбираете пару и размер</b><br><span class="muted">Оформляете заказ здесь. Это ни к чему не обязывает.</span></li>
+      <li><b>Подтверждаем наличие</b><br><span class="muted">Менеджер пишет вам и сверяет модель и размер.</span></li>
       <li><b>Оплата</b><br><span class="muted" id="i-pay"></span></li>
       <li><b>Доставка</b><br><span class="muted" id="i-del"></span></li>
-    </ol></div>
-    <button class="btn wa" onclick="openWA('Здравствуйте! Хочу задать вопрос по кроссовкам.')">Написать менеджеру в WhatsApp</button>
+    </ol>
+    <button class="pill wa" onclick="openWA('Здравствуйте! Хочу задать вопрос.')">Написать в WhatsApp</button>
   </section>
 
   <section id="v-admin" class="hide">
-    <div class="tabs"><button id="at-orders" onclick="adminTab('orders')">Заказы</button><button id="at-products" onclick="adminTab('products')">Товары</button><button id="at-settings" onclick="adminTab('settings')">Настройки</button></div>
+    <div class="ptabs" style="margin-top:6px"><button id="at-orders" onclick="adminTab('orders')">Заказы</button><button id="at-products" onclick="adminTab('products')">Товары</button><button id="at-cats" onclick="adminTab('cats')">Категории</button><button id="at-settings" onclick="adminTab('settings')">Настройки</button></div>
     <div id="admin-body"></div>
   </section>
 </main>
 
 <nav>
-  <button id="n-catalog" onclick="show('catalog')"><i>👟</i>Каталог</button>
-  <button id="n-cart" onclick="show('cart')"><i>🛒</i>Корзина</button>
-  <button id="n-orders" onclick="show('orders')"><i>📦</i>Заказы</button>
-  <button id="n-info" onclick="show('info')"><i>🛡️</i>Гарантии</button>
-  <button id="n-admin" class="hide" onclick="show('admin')"><i>⚙️</i>Админка</button>
+  <button id="n-catalog" onclick="show('catalog')"></button>
+  <button id="n-fav" onclick="show('fav')"></button>
+  <button id="n-cart" onclick="show('cart')"></button>
+  <button id="n-orders" onclick="show('orders')"></button>
+  <button id="n-info" onclick="show('info')"></button>
 </nav>
-
 <div class="ov hide" id="ov" onclick="if(event.target===this)closeSheet()"><div class="sheet" id="sheet"></div></div>
 <div id="toast"></div>
 
 <script>
 const tg = window.Telegram?.WebApp;
-try { tg?.ready(); tg?.expand(); tg?.setHeaderColor('#0f1012'); tg?.setBackgroundColor('#ecedef'); } catch (e) {}
+try { tg?.ready(); tg?.expand(); tg?.setHeaderColor('#ffffff'); tg?.setBackgroundColor('#ffffff'); } catch (e) {}
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = n => Math.round(n).toLocaleString('ru-RU') + ' сом';
-const CATS = [['all','Все'],['drops','🔥 Дропы'],['lifestyle','⚡ Casual'],['running','🏃 Бег']];
-const STATUS = {new:['🆕 Новый','#2563eb'],confirmed:['✅ Подтверждён','#0d9488'],paid:['💰 Оплачен','#16a34a'],shipped:['🚚 Отправлен','#9333ea'],done:['🎉 Доставлен','#475569'],cancel:['❌ Отменён','#dc2626']};
-let saved = []; try { saved = JSON.parse(localStorage.getItem('cart') || '[]'); } catch (e) {}
-const S = {cfg:{}, products:[], cat:'all', q:'', cart:saved, admin:false, authed:false, picked:{}, view:'catalog', atab:'orders', ofilter:'all', aprods:[], aorders:[]};
+const IC = {
+  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>', heart:'<path d="M12 20.5s-8-4.8-8-11A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8 2.5c0 6.2-8 11-8 11z"/>',
+  bag:'<path d="M5 8h14l-1 12H6L5 8zM9 8V6a3 3 0 0 1 6 0v2"/>', box:'<path d="M3 7.5L12 3l9 4.5v9L12 21l-9-4.5v-9zM3 7.5l9 4.5 9-4.5M12 12v9"/>',
+  grid:'<path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>', info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>', share:'<path d="M12 15V3M8 7l4-4 4 4M5 12v8h14v-8"/>',
+  back:'<path d="M15 5l-7 7 7 7"/>', trash:'<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>', check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>', truck:'<path d="M2 6h11v10H2zM13 10h4l3 3v3h-7M6 19a1.5 1.5 0 1 0 0-.01M17 19a1.5 1.5 0 1 0 0-.01"/>',
+  chat:'<path d="M4 5h16v11H9l-5 4V5z"/>', shield:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/>'
+};
+const ic = (n, s = 22, f = 'none') => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="${f}" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${IC[n]}</svg>`;
+const STATUS = {new:['Новый','#2563eb'],confirmed:['Подтверждён','#0d9488'],paid:['Оплачен','#1a8f4c'],shipped:['Отправлен','#7c3aed'],done:['Доставлен','#52525b'],cancel:['Отменён','#d43f21']};
+const FLOW = ['new','confirmed','paid','shipped','done'];
+const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
+const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+const S = {cfg:{}, cats:[], products:[], cat:'all', q:'', sort:'new', size:'', cart:load('cart', []), fav:load('fav', []), picked:{}, del:'delivery', view:'catalog', atab:'orders', ofilter:'all', aprods:[], aorders:[], myorders:[], authed:false, admin:false};
+let F = {images:[]};
 
 async function api(path, body, method) {
   const r = await fetch(path, {method: method || (body ? 'POST' : 'GET'), headers: {'Content-Type':'application/json','X-Init-Data': tg?.initData || ''}, body: body ? JSON.stringify(body) : undefined});
@@ -148,12 +189,21 @@ async function api(path, body, method) {
 let tt; function toast(m) { const t = $('toast'); t.textContent = m; t.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('show'), 2200); }
 const tap = () => { try { tg?.HapticFeedback?.impactOccurred('light'); } catch (e) {} };
 const openLink = u => tg?.openLink ? tg.openLink(u) : window.open(u, '_blank');
-const openWA = text => { if (!S.cfg.whatsapp) return toast('WhatsApp пока не настроен'); openLink(`https://wa.me/${S.cfg.whatsapp}?text=${encodeURIComponent(text)}`); };
-const saveCart = () => { try { localStorage.setItem('cart', JSON.stringify(S.cart)); } catch (e) {} const n = S.cart.reduce((a, c) => a + c.qty, 0); $('pill').textContent = '🛒 ' + n; };
+const openWA = t => S.cfg.whatsapp ? openLink(`https://wa.me/${S.cfg.whatsapp}?text=${encodeURIComponent(t)}`) : toast('WhatsApp пока не настроен');
+const cartCount = () => S.cart.reduce((a, c) => a + c.qty, 0);
+function saveCart() { store('cart', S.cart); const n = cartCount(); $('n-cart').innerHTML = ic('bag') + 'Корзина' + (n ? `<span class="nb">${n}</span>` : ''); }
+function drawNav() {
+  $('n-catalog').innerHTML = ic('grid') + 'Каталог'; $('n-fav').innerHTML = ic('heart') + 'Избранное';
+  $('n-orders').innerHTML = ic('box') + 'Заказы'; $('n-info').innerHTML = ic('info') + 'О нас';
+  $('ic-search').innerHTML = ic('search', 18); $('btn-admin').innerHTML = ic('gear', 20); saveCart();
+  $('t1').innerHTML = ic('truck', 16) + 'Доставка по Бишкеку'; $('t2').innerHTML = ic('chat', 16) + 'Подтверждение в WhatsApp'; $('t3').innerHTML = ic('shield', 16) + 'Оплата после подтверждения';
+}
 
 function show(v) {
   S.view = v;
-  ['catalog','cart','orders','info','admin'].forEach(x => { $('v-' + x).classList.toggle('hide', x !== v); $('n-' + x).classList.toggle('on', x === v); });
+  ['catalog','fav','cart','orders','info','admin'].forEach(x => { $('v-' + x).classList.toggle('hide', x !== v); $('n-' + x)?.classList.toggle('on', x === v); });
+  $('searchbar').classList.toggle('hide', v !== 'catalog');
+  if (v === 'fav') renderFav();
   if (v === 'cart') renderCart();
   if (v === 'orders') loadMyOrders();
   if (v === 'info') { $('i-pay').textContent = S.cfg.pay_text || ''; $('i-del').textContent = S.cfg.delivery_text || ''; }
@@ -162,123 +212,172 @@ function show(v) {
 }
 
 /* ───── Каталог ───── */
-function renderChips() {
-  $('chips').innerHTML = CATS.map(([k, n]) => `<button class="chip ${S.cat === k ? 'on' : ''}" onclick="S.cat='${k}';renderChips();renderCatalog()">${n}</button>`).join('');
+const isFav = id => S.fav.includes(id);
+function card(p) {
+  const disc = p.old_price > p.price;
+  const cat = S.cats.find(c => c.slug === p.category)?.name || '';
+  return `<div class="pc" onclick="openProduct(${p.id})"><div class="ph"><img loading="lazy" src="${esc(p.image)}" alt="">
+    ${p.badge ? `<span class="bd">${esc(p.badge)}</span>` : ''}<button class="fv ${isFav(p.id) ? 'on' : ''}" data-fav="${p.id}" onclick="toggleFav(${p.id},event)" aria-label="В избранное">${ic('heart', 18, isFav(p.id) ? 'currentColor' : 'none')}</button></div>
+    <div class="b"><div class="tt">${esc(p.title)}</div><div class="br">${esc(p.brand || cat)}</div>
+    <span class="pr ${disc ? 'sale' : ''}">${money(p.price)}</span>${disc ? `<span class="old">${money(p.old_price)}</span>` : ''}</div></div>`;
+}
+function renderCats() {
+  $('cats').innerHTML = [{slug:'all', name:'Все'}, ...S.cats].map(c => `<button class="${S.cat === c.slug ? 'on' : ''}" onclick="S.cat='${esc(c.slug)}';renderCats();renderCatalog()">${esc(c.name)}</button>`).join('');
+  const sizes = [...new Set(S.products.flatMap(p => p.sizes))].sort((a, b) => a - b);
+  $('sizef').innerHTML = '<option value="">Все размеры</option>' + sizes.map(s => `<option value="${esc(s)}" ${S.size === s ? 'selected' : ''}>Размер ${esc(s)}</option>`).join('');
 }
 function renderCatalog() {
   const q = S.q.trim().toLowerCase();
-  const list = S.products.filter(p => (S.cat === 'all' || p.category === S.cat) && (!q || (p.title + ' ' + p.brand).toLowerCase().includes(q)));
-  $('grid').innerHTML = list.map(p => {
-    const disc = p.old_price > p.price ? Math.round((1 - p.price / p.old_price) * 100) : 0;
-    return `<button class="pc" onclick="openProduct(${p.id})"><div class="ph"><img loading="lazy" src="${esc(p.image)}" alt="">${disc ? `<span class="tag">−${disc}%</span>` : ''}</div>
-      <div class="b"><div class="br">${esc(p.brand)}</div><div class="tt">${esc(p.title)}</div>
-      <span class="pr">${money(p.price)}</span>${disc ? `<span class="old">${money(p.old_price)}</span>` : ''}</div></button>`;
-  }).join('') || `<div class="empty" style="grid-column:1/-1">Ничего не найдено. Попробуйте другой запрос.</div>`;
+  let list = S.products.filter(p => (S.cat === 'all' || p.category === S.cat) && (!S.size || p.sizes.includes(S.size)) && (!q || (p.title + ' ' + p.brand).toLowerCase().includes(q)));
+  if (S.sort === 'asc') list.sort((a, b) => a.price - b.price);
+  else if (S.sort === 'desc') list.sort((a, b) => b.price - a.price);
+  else if (S.sort === 'sale') list = list.filter(p => p.old_price > p.price).sort((a, b) => (b.old_price / b.price) - (a.old_price / a.price));
+  $('count').textContent = list.length ? `${list.length} шт.` : '';
+  $('grid').innerHTML = list.map(card).join('') || `<div class="empty" style="grid-column:1/-1">${ic('search', 32)}<b>Ничего не найдено</b>Измените запрос или фильтры</div>`;
 }
+function toggleFav(id, ev) {
+  ev?.stopPropagation(); S.fav = isFav(id) ? S.fav.filter(x => x !== id) : [...S.fav, id]; store('fav', S.fav); tap();
+  document.querySelectorAll(`[data-fav="${id}"]`).forEach(b => { b.classList.toggle('on', isFav(id)); b.innerHTML = ic('heart', b.classList.contains('ib') ? 20 : 18, isFav(id) ? 'currentColor' : 'none'); });
+  if (S.view === 'fav') renderFav();
+}
+function renderFav() {
+  const list = S.products.filter(p => isFav(p.id));
+  $('fav-grid').innerHTML = list.map(card).join('') || `<div class="empty" style="grid-column:1/-1">${ic('heart', 32)}<b>Пока пусто</b>Нажмите на сердечко у понравившейся пары</div>`;
+}
+
+/* ───── Карточка товара ───── */
+function galScroll(el) { const i = Math.round(el.scrollLeft / el.clientWidth) + 1; const c = $('gcnt'); if (c) c.textContent = i + '/' + el.children.length; }
 function openProduct(id) {
   const p = S.products.find(x => x.id === id); if (!p) return;
-  const sel = S.picked[id];
-  $('sheet').innerHTML = `<button class="x" onclick="closeSheet()">✕</button>
-    <img class="big" src="${esc(p.image)}" alt="">
-    <div class="br">${esc(p.brand)}</div><h2 style="margin:2px 0 6px;font-size:20px">${esc(p.title)}</h2>
-    <div><span class="pr" style="font-size:20px">${money(p.price)}</span>${p.old_price > p.price ? `<span class="old">${money(p.old_price)}</span>` : ''}</div>
-    <p class="muted" style="margin-top:10px">${esc(p.description)}</p>
-    <label>Размер (EU)</label>
-    <div class="sizes">${p.sizes.map(s => `<button class="sz ${sel === s ? 'on' : ''}" onclick="S.picked[${id}]='${esc(s)}';openProduct(${id})">${esc(s)}</button>`).join('')}</div>
-    <button class="btn sig" onclick="addToCart(${id})">Добавить в корзину</button>`;
-  $('ov').classList.remove('hide');
+  const disc = p.old_price > p.price, pct = disc ? Math.round((1 - p.price / p.old_price) * 100) : 0;
+  const similar = S.products.filter(x => x.id !== id && x.category === p.category).slice(0, 8);
+  $('sheet').className = 'sheet full';
+  $('sheet').innerHTML = `<div class="gw"><div class="gal" onscroll="galScroll(this)">${p.images.map(u => `<img src="${esc(u)}" alt="">`).join('')}</div>
+      <button class="ib" style="left:12px" onclick="closeSheet()" aria-label="Назад">${ic('back', 20)}</button>
+      <button class="ib" style="right:108px" onclick="shareProduct(${id})" aria-label="Поделиться">${ic('share', 19)}</button>
+      <button class="ib ${isFav(id) ? 'on' : ''}" data-fav="${id}" style="right:60px;${isFav(id) ? 'color:var(--sale)' : ''}" onclick="toggleFav(${id},event);this.style.color=isFav(${id})?'var(--sale)':''" aria-label="Избранное">${ic('heart', 20, isFav(id) ? 'currentColor' : 'none')}</button>
+      ${p.images.length > 1 ? `<span class="cnt" id="gcnt">1/${p.images.length}</span>` : ''}</div>
+    <div class="pb">${p.badge ? `<div class="muted" style="font-weight:600;color:var(--sale)">${esc(p.badge)}</div>` : ''}
+      <h2 style="margin:2px 0 2px;font-size:21px">${esc(p.title)}</h2><div class="br">${esc(p.brand)}</div>
+      <div style="margin:8px 0 18px"><span class="pr ${disc ? 'sale' : ''}" style="font-size:19px">${money(p.price)}</span>${disc ? `<span class="old">${money(p.old_price)}</span><span class="muted" style="color:var(--sale);margin-left:8px;font-weight:600">−${pct}%</span>` : ''}</div>
+      <div class="row sp"><b>Выберите размер (EU)</b></div>
+      <div class="sizes" id="sizes">${p.sizes.map(s => `<button class="sz ${S.picked[id] === s ? 'on' : ''}" onclick="pickSize(this,${id},'${esc(s)}')">${esc(s)}</button>`).join('')}</div>
+      <p class="muted" style="margin:14px 0 18px;white-space:pre-line">${esc(p.description)}</p>
+      <details><summary>Доставка</summary><p class="muted" style="margin-top:8px">${esc(S.cfg.delivery_text)}</p></details>
+      <details><summary>Оплата</summary><p class="muted" style="margin-top:8px">${esc(S.cfg.pay_text)}</p></details>
+      ${similar.length ? `<h3 style="margin:24px 0 12px">Похожие модели</h3><div class="rail">${similar.map(card).join('')}</div>` : ''}</div>
+    <div class="bar"><button class="pill" onclick="addToCart(${id})">Добавить в корзину</button></div>`;
+  $('ov').classList.remove('hide'); $('sheet').scrollTop = 0;
+  try { tg?.BackButton.show(); tg?.BackButton.onClick(closeSheet); } catch (e) {}
 }
-function closeSheet() { $('ov').classList.add('hide'); }
+function pickSize(el, id, s) { S.picked[id] = s; [...el.parentNode.children].forEach(b => b.classList.toggle('on', b === el)); tap(); }
+function closeSheet() { $('ov').classList.add('hide'); try { tg?.BackButton.hide(); tg?.BackButton.offClick(closeSheet); } catch (e) {} }
+function shareProduct(id) {
+  const p = S.products.find(x => x.id === id), link = S.cfg.app_link ? `${S.cfg.app_link}?startapp=p${id}` : location.origin;
+  const u = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(p.title + ' — ' + money(p.price))}`;
+  tg?.openTelegramLink ? tg.openTelegramLink(u) : openLink(u);
+}
 
 /* ───── Корзина ───── */
 function addToCart(id) {
   const p = S.products.find(x => x.id === id), size = S.picked[id];
-  if (!size) return toast('Сначала выберите размер');
+  if (!size) { toast('Выберите размер'); $('sizes')?.scrollIntoView({block:'center', behavior:'smooth'}); return; }
   const ex = S.cart.find(i => i.id === id && i.size === size);
   if (ex) ex.qty = Math.min(10, ex.qty + 1); else S.cart.push({id, size, qty:1, title:p.title, price:p.price, image:p.image});
-  saveCart(); closeSheet(); tap(); toast('Добавлено в корзину');
+  saveCart(); tap(); toast('Добавлено в корзину');
 }
-function changeQty(i, d) { S.cart[i].qty += d; if (S.cart[i].qty < 1) S.cart.splice(i, 1); if (S.cart[i]?.qty > 10) S.cart[i].qty = 10; saveCart(); renderCart(); }
+function changeQty(i, d) { S.cart[i].qty = Math.min(10, S.cart[i].qty + d); if (S.cart[i].qty < 1) S.cart.splice(i, 1); saveCart(); renderCart(); }
+function setDel(m) { S.del = m; $('d-delivery').classList.toggle('on', m === 'delivery'); $('d-pickup').classList.toggle('on', m === 'pickup'); $('addr-wrap').classList.toggle('hide', m === 'pickup'); }
 function renderCart() {
-  const empty = !S.cart.length;
+  const sum = S.cart.reduce((a, c) => a + c.price * c.qty, 0), empty = !S.cart.length;
   $('checkout').classList.toggle('hide', empty);
-  $('cart-items').innerHTML = empty ? `<div class="empty">Корзина пуста.<br>Выберите пару в каталоге.</div>` : S.cart.map((i, k) => `
-    <div class="card row"><img class="thumb" src="${esc(i.image)}" alt=""><div style="flex:1;min-width:0">
-      <div style="font-weight:700;font-size:14px">${esc(i.title)}</div><div class="muted">Размер ${esc(i.size)} · ${money(i.price)}</div></div>
-      <div class="qty"><button onclick="changeQty(${k},-1)">−</button><span>${i.qty}</span><button onclick="changeQty(${k},1)">+</button></div></div>`).join('');
-  $('cart-total').textContent = money(S.cart.reduce((a, c) => a + c.price * c.qty, 0));
-  try { $('o-phone').value ||= localStorage.getItem('phone') || ''; $('o-addr').value ||= localStorage.getItem('addr') || ''; } catch (e) {}
+  $('cart-items').innerHTML = empty ? `<div class="empty">${ic('bag', 34)}<b>Корзина пуста</b>Выберите пару в каталоге<div style="margin-top:16px"><button class="btn" onclick="show('catalog')">Перейти в каталог</button></div></div>` :
+    S.cart.map((i, k) => `<div class="line"><img class="thumb" src="${esc(i.image)}" alt=""><div style="flex:1;min-width:0">
+      <div style="font-weight:600;font-size:14px">${esc(i.title)}</div><div class="muted">Размер ${esc(i.size)}</div><div style="font-weight:700;margin:2px 0 8px">${money(i.price)}</div>
+      <div class="row sp"><div class="qty"><button onclick="changeQty(${k},-1)">−</button><span>${i.qty}</span><button onclick="changeQty(${k},1)">+</button></div>
+      <button class="muted" onclick="S.cart.splice(${k},1);saveCart();renderCart()" aria-label="Удалить">${ic('trash', 19)}</button></div></div></div>`).join('');
+  $('c-sub').textContent = money(sum); $('c-total').textContent = money(sum); $('o-btn').textContent = `Оформить заказ · ${money(sum)}`;
+  if (!$('o-phone').value) $('o-phone').value = load('phone', ''); if (!$('o-addr').value) $('o-addr').value = load('addr', '');
 }
 async function submitOrder() {
-  const phone = $('o-phone').value.trim(), address = $('o-addr').value.trim(), comment = $('o-comm').value.trim();
+  const phone = $('o-phone').value.trim(), pick = S.del === 'pickup';
+  const address = pick ? 'Самовывоз' : $('o-addr').value.trim();
+  const comment = (pick ? '[Самовывоз] ' : '') + $('o-comm').value.trim();
   if (phone.replace(/\D/g, '').length < 9) return toast('Укажите номер телефона');
-  if (address.length < 5) return toast('Укажите адрес доставки');
+  if (!pick && address.length < 5) return toast('Укажите адрес доставки');
   $('o-btn').disabled = true;
   try {
     const r = await api('/api/orders', {phone, address, comment, items: S.cart.map(i => ({id:i.id, size:i.size, qty:i.qty}))});
-    try { localStorage.setItem('phone', phone); localStorage.setItem('addr', address); } catch (e) {}
+    store('phone', phone); if (!pick) store('addr', address);
     S.cart = []; saveCart(); renderCart(); showDone(r);
   } catch (e) { toast(e.message); }
   $('o-btn').disabled = false;
 }
 function showDone(r) {
-  $('sheet').innerHTML = `<div style="text-align:center;padding:10px 0"><div style="font-size:44px">✅</div><h2 style="margin:6px 0">Заказ #${r.id} принят</h2>
-    <div class="muted">Сумма: <b style="color:var(--ink)">${money(r.total)}</b></div></div>
-    <div class="card" style="margin-top:12px"><b>Что дальше</b><p class="muted" style="margin-top:6px">Менеджер напишет вам, подтвердит наличие и размер, затем пришлёт реквизиты оплаты.</p>
+  $('sheet').className = 'sheet';
+  $('sheet').innerHTML = `<div style="text-align:center;padding:8px 0 4px"><div style="width:56px;height:56px;border-radius:50%;background:var(--ok);color:#fff;display:grid;place-items:center;margin:0 auto 10px">${ic('check', 30)}</div>
+    <h2 style="margin:0 0 4px">Заказ #${r.id} принят</h2><div class="muted">Сумма: <b style="color:var(--ink)">${money(r.total)}</b></div></div>
+    <div class="box" style="margin-top:16px"><b>Что дальше</b><p class="muted" style="margin-top:6px">Менеджер напишет вам, подтвердит наличие и размер, затем пришлёт реквизиты оплаты.</p>
     <p class="muted" style="margin-top:8px">${esc(S.cfg.pay_text)}</p>${S.cfg.qr ? `<img class="qr" src="${esc(S.cfg.qr)}" alt="QR для оплаты">` : ''}</div>
-    ${S.cfg.whatsapp ? `<button class="btn wa" onclick="openWA('Здравствуйте! Мой заказ #${r.id} на ${Math.round(r.total)} сом.')">Написать в WhatsApp</button><div style="height:8px"></div>` : ''}
-    <button class="btn ghost" onclick="closeSheet();show('orders')">Мои заказы</button>`;
+    ${S.cfg.whatsapp ? `<button class="pill wa" onclick="openWA('Здравствуйте! Мой заказ #${r.id} на ${Math.round(r.total)} сом.')">Написать в WhatsApp</button><div style="height:8px"></div>` : ''}
+    <button class="pill out" onclick="closeSheet();show('orders')">Мои заказы</button>`;
   $('ov').classList.remove('hide');
 }
 
 /* ───── Мои заказы ───── */
 const badge = s => { const [t, c] = STATUS[s] || [s, '#444']; return `<span class="badge" style="background:${c}">${t}</span>`; };
-const itemsHtml = it => it.map(i => `${esc(i.title)} — р.${esc(i.size)} × ${i.qty}`).join('<br>');
+const itemsHtml = it => it.map(i => `${esc(i.title)} · р.${esc(i.size)} × ${i.qty}`).join('<br>');
 async function loadMyOrders() {
   const box = $('orders-list');
-  if (!S.authed) { box.innerHTML = `<div class="empty">Откройте магазин через Telegram-бота, чтобы видеть заказы.</div>`; return; }
+  if (!S.authed) { box.innerHTML = `<div class="empty">${ic('box', 34)}<b>Откройте магазин в Telegram</b>Так мы покажем историю заказов</div>`; return; }
   try {
-    const list = await api('/api/my_orders');
-    box.innerHTML = list.map(o => `<div class="card"><div class="row sp"><b>Заказ #${o.id}</b>${badge(o.status)}</div>
-      <p class="muted" style="margin:8px 0">${itemsHtml(o.items)}</p><b>${money(o.total)}</b></div>`).join('') || `<div class="empty">Заказов пока нет.</div>`;
+    S.myorders = await api('/api/my_orders');
+    box.innerHTML = S.myorders.map(o => { const step = FLOW.indexOf(o.status);
+      return `<div class="box"><div class="row sp"><b>Заказ #${o.id}</b>${badge(o.status)}</div>
+      ${o.status !== 'cancel' ? `<div class="prog">${FLOW.map((_, i) => `<i class="${i <= step ? 'on' : ''}"></i>`).join('')}</div>` : ''}
+      <div class="row" style="margin:10px 0">${o.items.slice(0, 4).map(i => i.image ? `<img class="thumb" style="width:52px;height:52px" src="${esc(i.image)}" alt="">` : '').join('')}</div>
+      <p class="muted">${itemsHtml(o.items)}</p><div class="row sp" style="margin-top:10px"><b>${money(o.total)}</b><button class="btn out" onclick="repeatOrder(${o.id})">Повторить</button></div></div>`; }).join('') || `<div class="empty">${ic('box', 34)}<b>Заказов пока нет</b>Они появятся здесь после оформления</div>`;
   } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+function repeatOrder(id) {
+  const o = S.myorders.find(x => x.id === id); let n = 0;
+  o.items.forEach(i => { const p = S.products.find(x => x.id === i.id); if (p && p.sizes.includes(i.size)) { const ex = S.cart.find(c => c.id === i.id && c.size === i.size); if (ex) ex.qty = Math.min(10, ex.qty + i.qty); else S.cart.push({id:i.id, size:i.size, qty:i.qty, title:p.title, price:p.price, image:p.image}); n++; } });
+  saveCart(); toast(n ? 'Товары добавлены в корзину' : 'Эти модели больше недоступны'); if (n) show('cart');
 }
 
 /* ───── Админка ───── */
 function adminTab(t) {
-  S.atab = t;
-  ['orders','products','settings'].forEach(x => $('at-' + x).classList.toggle('on', x === t));
-  ({orders: loadAdminOrders, products: loadAdminProducts, settings: renderSettings})[t]();
+  S.atab = t; ['orders','products','cats','settings'].forEach(x => $('at-' + x).classList.toggle('on', x === t));
+  ({orders: loadAdminOrders, products: loadAdminProducts, cats: renderAdminCats, settings: renderSettings})[t]();
 }
 async function loadAdminOrders() {
   const box = $('admin-body'); box.innerHTML = '<div class="empty">Загрузка…</div>';
   try { S.aorders = await api('/api/admin/orders'); } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   const f = S.ofilter, list = S.aorders.filter(o => f === 'all' || o.status === f);
-  box.innerHTML = `<div class="chips" style="padding-top:0">${[['all','Все'], ...Object.entries(STATUS).map(([k, v]) => [k, v[0]])].map(([k, n]) => `<button class="chip ${f === k ? 'on' : ''}" onclick="S.ofilter='${k}';loadAdminOrders()">${n}</button>`).join('')}</div>` +
-    (list.map(o => `<div class="card"><div class="row sp"><b>Заказ #${o.id} · ${money(o.total)}</b>${badge(o.status)}</div>
+  const day = Date.now() / 1000 - 86400, rev = S.aorders.filter(o => ['paid','shipped','done'].includes(o.status)).reduce((a, o) => a + o.total, 0);
+  box.innerHTML = `<div class="stat"><div><b>${S.aorders.filter(o => o.status === 'new').length}</b><span>новых</span></div><div><b>${S.aorders.filter(o => o.created > day).length}</b><span>за 24 часа</span></div><div><b>${Math.round(rev / 1000)}k</b><span>оплачено, сом</span></div></div>
+    <div class="tabs" style="margin-bottom:8px">${[['all','Все'], ...Object.entries(STATUS).map(([k, v]) => [k, v[0]])].map(([k, n]) => `<button class="${f === k ? 'on' : ''}" onclick="S.ofilter='${k}';loadAdminOrders()">${n}</button>`).join('')}</div>` +
+    (list.map(o => `<div class="box" style="margin-top:12px"><div class="row sp"><b>#${o.id} · ${money(o.total)}</b>${badge(o.status)}</div>
       <p class="muted" style="margin:8px 0">${itemsHtml(o.items)}</p>
-      <p style="font-size:13px">👤 ${esc(o.username)}<br>📞 <a href="tel:${esc(o.phone)}">${esc(o.phone)}</a><br>📍 ${esc(o.address)}${o.comment ? `<br>💬 ${esc(o.comment)}` : ''}<br><span class="muted">${new Date(o.created * 1000).toLocaleString('ru-RU')}</span></p>
-      <div class="row" style="flex-wrap:wrap;margin-top:10px">${Object.entries(STATUS).filter(([k]) => k !== o.status).map(([k, v]) => `<button class="btn sm ghost" onclick="setStatus(${o.id},'${k}')">${v[0]}</button>`).join('')}
-      ${o.wa ? `<button class="btn sm wa" onclick="openLink('https://wa.me/${o.wa}')">WhatsApp</button>` : ''}</div></div>`).join('') || '<div class="empty">Заказов нет.</div>');
+      <p style="font-size:13px">${esc(o.username)} · <a href="tel:${esc(o.phone)}">${esc(o.phone)}</a><br>${esc(o.address)}${o.comment ? `<br>${esc(o.comment)}` : ''}<br><span class="muted">${new Date(o.created * 1000).toLocaleString('ru-RU')}</span></p>
+      <div class="row wrap" style="margin-top:10px">${Object.entries(STATUS).filter(([k]) => k !== o.status).map(([k, v]) => `<button class="btn out" onclick="setStatus(${o.id},'${k}')">${v[0]}</button>`).join('')}${o.wa ? `<button class="btn wa" onclick="openLink('https://wa.me/${o.wa}')">WhatsApp</button>` : ''}</div></div>`).join('') || '<div class="empty">Заказов нет</div>');
 }
 async function setStatus(id, st) { try { await api(`/api/admin/orders/${id}/status`, {status: st}); toast('Статус обновлён'); loadAdminOrders(); } catch (e) { toast(e.message); } }
 
 async function loadAdminProducts() {
   const box = $('admin-body'); box.innerHTML = '<div class="empty">Загрузка…</div>';
   try { S.aprods = await api('/api/admin/products'); } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-  box.innerHTML = `<button class="btn sig" onclick="productForm()">+ Добавить товар</button><div style="height:12px"></div>` + S.aprods.map(p => `
-    <div class="card"><div class="row"><img class="thumb" src="${esc(p.image)}" alt=""><div style="flex:1;min-width:0"><b style="font-size:14px">${esc(p.title)}</b>
-      <div class="muted">${money(p.price)} · ${p.active ? '✅ в каталоге' : '🚫 скрыт'}</div></div></div>
-      <div class="row" style="margin-top:10px;flex-wrap:wrap"><button class="btn sm ghost" onclick="productForm(${p.id})">Изменить</button>
-      <button class="btn sm ghost" onclick="toggleProduct(${p.id})">${p.active ? 'Скрыть' : 'Показать'}</button>
-      <button class="btn sm ghost" style="color:#dc2626" onclick="delProduct(${p.id})">Удалить</button></div></div>`).join('');
+  box.innerHTML = `<button class="pill" onclick="productForm()">+ Добавить товар</button><div style="height:6px"></div>` + S.aprods.map(p => `
+    <div class="line"><img class="thumb" src="${esc(p.image)}" alt=""><div style="flex:1;min-width:0"><b style="font-size:14px">${esc(p.title)}</b>
+      <div class="muted">${money(p.price)} · ${p.images.length} фото · ${p.active ? 'в каталоге' : 'скрыт'}</div>
+      <div class="row wrap" style="margin-top:8px"><button class="btn out" onclick="productForm(${p.id})">Изменить</button><button class="btn out" onclick="toggleProduct(${p.id})">${p.active ? 'Скрыть' : 'Показать'}</button><button class="btn red" onclick="delProduct(${p.id})">Удалить</button></div></div></div>`).join('');
 }
+async function refreshCatalog() { const d = await api('/api/init'); S.products = d.products; S.cats = d.cats; renderCats(); renderCatalog(); }
 async function toggleProduct(id) { const p = S.aprods.find(x => x.id === id); try { await api('/api/admin/products', {...p, active: !p.active}); await refreshCatalog(); loadAdminProducts(); } catch (e) { toast(e.message); } }
 async function delProduct(id) {
   if (!confirm('Удалить товар навсегда?')) return;
   try { await api('/api/admin/products/' + id, null, 'DELETE'); await refreshCatalog(); loadAdminProducts(); toast('Удалено'); } catch (e) { toast(e.message); }
 }
-async function refreshCatalog() { const d = await api('/api/init'); S.products = d.products; renderCatalog(); }
 
 function fileToJpeg(file, max) {
   return new Promise((res, rej) => {
@@ -291,45 +390,70 @@ function fileToJpeg(file, max) {
     r.onerror = rej; r.readAsDataURL(file);
   });
 }
-async function pickPhoto(input, targetId, max) {
-  const f = input.files[0]; if (!f) return;
-  toast('Загружаю фото…');
-  try {
-    const {url} = await api('/api/admin/upload', {data: await fileToJpeg(f, max)});
-    $(targetId).value = url; const pv = $(targetId + '-pv'); if (pv) { pv.src = url; pv.classList.remove('hide'); } toast('Фото загружено');
-  } catch (e) { toast(e.message || 'Не удалось загрузить'); }
+const upload = async (f, max) => (await api('/api/admin/upload', {data: await fileToJpeg(f, max)})).url;
+function renderPhotos() {
+  $('f-photos').innerHTML = F.images.map((u, i) => `<div><img src="${esc(u)}" alt=""><button class="x" onclick="F.images.splice(${i},1);renderPhotos()">✕</button>
+    ${i === 0 ? '<span class="m">Главное</span>' : `<button class="m" onclick="F.images.unshift(...F.images.splice(${i},1));renderPhotos()">Сделать главным</button>`}</div>`).join('');
+}
+async function addPhotos(input) {
+  const files = [...input.files]; input.value = '';
+  for (let i = 0; i < files.length && F.images.length < 12; i++) {
+    toast(`Загрузка фото ${i + 1} из ${files.length}…`);
+    try { F.images.push(await upload(files[i], 1000)); renderPhotos(); } catch (e) { toast(e.message || 'Не удалось загрузить'); }
+  }
+  toast('Фото загружены');
 }
 function productForm(id) {
-  const p = S.aprods.find(x => x.id === id) || {title:'', brand:'', price:'', old_price:'', image:'', sizes:['40','41','42','43','44'], category:'drops', description:'', active:true};
-  $('sheet').innerHTML = `<button class="x" onclick="closeSheet()">✕</button><h2>${id ? 'Изменить товар' : 'Новый товар'}</h2>
-    <label>Фото (из галереи телефона)</label><input type="file" accept="image/*" class="inp" onchange="pickPhoto(this,'f-image',900)">
-    <input type="hidden" id="f-image" value="${esc(p.image)}"><img id="f-image-pv" class="pv ${p.image ? '' : 'hide'}" src="${esc(p.image)}" alt="">
-    <label>Название</label><input id="f-title" class="inp" value="${esc(p.title)}" placeholder="Nike Dunk Low 'Panda'">
-    <label>Бренд</label><input id="f-brand" class="inp" value="${esc(p.brand)}" placeholder="Nike">
-    <div class="row"><div style="flex:1"><label>Цена, сом</label><input id="f-price" type="number" inputmode="numeric" class="inp" value="${p.price}"></div>
-    <div style="flex:1"><label>Старая цена</label><input id="f-old" type="number" inputmode="numeric" class="inp" value="${p.old_price || ''}"></div></div>
-    <label>Размеры через запятую</label><input id="f-sizes" class="inp" value="${esc(p.sizes.join(','))}">
-    <label>Категория</label><select id="f-cat" class="inp">${CATS.slice(1).map(([k, n]) => `<option value="${k}" ${p.category === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
-    <label>Описание</label><textarea id="f-desc" class="inp">${esc(p.description)}</textarea>
-    <label class="row" style="margin:12px 0"><input type="checkbox" id="f-active" ${p.active ? 'checked' : ''}> Показывать в каталоге</label>
-    <button class="btn sig" onclick="saveProduct(${id || 0})">Сохранить</button>`;
-  $('ov').classList.remove('hide');
+  const p = S.aprods.find(x => x.id === id) || {title:'', brand:'', price:'', old_price:'', images:[], badge:'', sizes:['40','41','42','43','44'], category:S.cats[0]?.slug || '', description:'', active:true};
+  F = {images: [...p.images]};
+  $('sheet').className = 'sheet';
+  $('sheet').innerHTML = `<div class="row sp"><h2 style="margin:0">${id ? 'Изменить товар' : 'Новый товар'}</h2><button class="ib" onclick="closeSheet()">${ic('back', 20)}</button></div>
+    <label class="l">Фото (можно выбрать сразу несколько)</label><input type="file" accept="image/*" multiple class="inp" onchange="addPhotos(this)"><div class="ph-grid" id="f-photos"></div>
+    <label class="l">Название</label><input id="f-title" class="inp" value="${esc(p.title)}" placeholder="Nike Dunk Low 'Panda'">
+    <label class="l">Бренд</label><input id="f-brand" class="inp" value="${esc(p.brand)}" placeholder="Nike">
+    <div class="row"><div style="flex:1"><label class="l">Цена, сом</label><input id="f-price" type="number" inputmode="numeric" class="inp" value="${p.price}"></div>
+    <div style="flex:1"><label class="l">Старая цена</label><input id="f-old" type="number" inputmode="numeric" class="inp" value="${p.old_price || ''}"></div></div>
+    <label class="l">Размеры через запятую</label><input id="f-sizes" class="inp" value="${esc(p.sizes.join(','))}">
+    <div class="row"><div style="flex:1"><label class="l">Категория</label><select id="f-cat" class="inp"><option value="">Без категории</option>${S.cats.map(c => `<option value="${esc(c.slug)}" ${p.category === c.slug ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
+    <div style="flex:1"><label class="l">Метка</label><select id="f-badge" class="inp">${['', 'Новинка', 'Хит', 'Последняя пара', 'Скидка'].map(b => `<option ${p.badge === b ? 'selected' : ''} value="${b}">${b || 'Нет'}</option>`).join('')}</select></div></div>
+    <label class="l">Описание</label><textarea id="f-desc" class="inp">${esc(p.description)}</textarea>
+    <label class="row" style="margin:14px 0"><input type="checkbox" id="f-active" ${p.active ? 'checked' : ''}> Показывать в каталоге</label>
+    <button class="pill" onclick="saveProduct(${id || 0})">Сохранить</button>`;
+  renderPhotos(); $('ov').classList.remove('hide');
 }
 async function saveProduct(id) {
-  const body = {id: id || undefined, image: $('f-image').value, title: $('f-title').value, brand: $('f-brand').value, price: $('f-price').value, old_price: $('f-old').value, sizes: $('f-sizes').value, category: $('f-cat').value, description: $('f-desc').value, active: $('f-active').checked};
+  const body = {id: id || undefined, images: F.images, title: $('f-title').value, brand: $('f-brand').value, price: $('f-price').value, old_price: $('f-old').value, sizes: $('f-sizes').value, category: $('f-cat').value, badge: $('f-badge').value, description: $('f-desc').value, active: $('f-active').checked};
   try { await api('/api/admin/products', body); closeSheet(); await refreshCatalog(); loadAdminProducts(); toast('Сохранено'); } catch (e) { toast(e.message); }
+}
+
+function renderAdminCats() {
+  $('admin-body').innerHTML = `<p class="muted" style="margin-bottom:10px">Категории видны покупателям как вкладки в каталоге.</p>
+    <div class="row" style="margin-bottom:14px"><input id="nc" class="inp" placeholder="Новая категория, например: Баскетбол"><button class="btn" onclick="saveCat('')">Добавить</button></div>` +
+    S.cats.map(c => `<div class="row" style="margin-bottom:10px"><input id="cat-${esc(c.slug)}" class="inp" value="${esc(c.name)}"><button class="btn out" onclick="saveCat('${esc(c.slug)}')">OK</button><button class="btn red" onclick="delCat('${esc(c.slug)}')">${ic('trash', 16)}</button></div>`).join('');
+}
+async function saveCat(slug) {
+  const name = (slug ? $('cat-' + slug) : $('nc')).value;
+  try { S.cats = await api('/api/admin/categories', {slug, name}); renderCats(); renderAdminCats(); toast('Сохранено'); } catch (e) { toast(e.message); }
+}
+async function delCat(slug) {
+  if (!confirm('Удалить категорию? Товары останутся, но без категории.')) return;
+  try { S.cats = await api('/api/admin/categories/' + slug, null, 'DELETE'); if (S.cat === slug) S.cat = 'all'; await refreshCatalog(); renderAdminCats(); } catch (e) { toast(e.message); }
 }
 
 function renderSettings() {
   const c = S.cfg;
-  $('admin-body').innerHTML = `<div class="card"><label style="margin-top:0">Название магазина</label><input id="s-name" class="inp" value="${esc(c.shop_name)}">
-    <label>Номер WhatsApp (996XXXXXXXXX)</label><input id="s-wa" class="inp" inputmode="numeric" value="${esc(c.whatsapp)}">
-    <label>Текст про оплату</label><textarea id="s-pay" class="inp">${esc(c.pay_text)}</textarea>
-    <label>Текст про доставку</label><textarea id="s-del" class="inp">${esc(c.delivery_text)}</textarea>
-    <label>QR-код для оплаты (скриншот из банка)</label><input type="file" accept="image/*" class="inp" onchange="pickPhoto(this,'s-qr',1000)">
-    <input type="hidden" id="s-qr" value="${esc(c.qr)}"><img id="s-qr-pv" class="pv ${c.qr ? '' : 'hide'}" src="${esc(c.qr)}" alt="">
-    ${c.qr ? `<button class="btn sm ghost" style="margin-top:8px" onclick="$('s-qr').value='';$('s-qr-pv').classList.add('hide')">Убрать QR</button>` : ''}</div>
-    <button class="btn sig" onclick="saveSettings()">Сохранить настройки</button>`;
+  $('admin-body').innerHTML = `<label class="l">Название магазина</label><input id="s-name" class="inp" value="${esc(c.shop_name)}">
+    <label class="l">Номер WhatsApp (996XXXXXXXXX)</label><input id="s-wa" class="inp" inputmode="numeric" value="${esc(c.whatsapp)}">
+    <label class="l">Текст про оплату</label><textarea id="s-pay" class="inp">${esc(c.pay_text)}</textarea>
+    <label class="l">Текст про доставку</label><textarea id="s-del" class="inp">${esc(c.delivery_text)}</textarea>
+    <label class="l">QR-код для оплаты (скриншот из банка)</label><input type="file" accept="image/*" class="inp" onchange="pickQR(this)">
+    <input type="hidden" id="s-qr" value="${esc(c.qr)}"><img id="s-qr-pv" class="qr ${c.qr ? '' : 'hide'}" src="${esc(c.qr)}" alt="">
+    ${c.qr ? `<button class="btn out" onclick="$('s-qr').value='';$('s-qr-pv').classList.add('hide')">Убрать QR</button>` : ''}
+    <div style="height:16px"></div><button class="pill" onclick="saveSettings()">Сохранить настройки</button>`;
+}
+async function pickQR(input) {
+  const f = input.files[0]; if (!f) return; toast('Загружаю QR…');
+  try { const u = await upload(f, 1000); $('s-qr').value = u; $('s-qr-pv').src = u; $('s-qr-pv').classList.remove('hide'); toast('QR загружен'); } catch (e) { toast(e.message || 'Не удалось загрузить'); }
 }
 async function saveSettings() {
   try { S.cfg = await api('/api/admin/settings', {shop_name: $('s-name').value, whatsapp: $('s-wa').value, pay_text: $('s-pay').value, delivery_text: $('s-del').value, qr: $('s-qr').value}); $('shopname').textContent = S.cfg.shop_name; toast('Настройки сохранены'); } catch (e) { toast(e.message); }
@@ -337,15 +461,16 @@ async function saveSettings() {
 
 /* ───── Запуск ───── */
 (async function () {
-  renderChips(); saveCart();
-  $('grid').innerHTML = '<div class="sk"></div><div class="sk"></div><div class="sk"></div><div class="sk"></div>';
+  drawNav(); $('grid').innerHTML = '<div class="sk"></div><div class="sk"></div><div class="sk"></div><div class="sk"></div>';
   try {
     const d = await api('/api/init');
-    S.cfg = d.cfg; S.products = d.products; S.authed = d.authed; S.admin = d.is_admin;
+    Object.assign(S, {cfg: d.cfg, cats: d.cats, products: d.products, authed: d.authed, admin: d.is_admin});
     $('shopname').textContent = S.cfg.shop_name; document.title = S.cfg.shop_name;
-    if (S.admin) $('n-admin').classList.remove('hide');
+    S.cart = S.cart.filter(i => S.products.some(p => p.id === i.id)); saveCart();
+    if (S.admin) $('btn-admin').classList.remove('hide');
   } catch (e) { toast('Нет соединения с сервером'); }
-  renderCatalog(); show('catalog');
+  renderCats(); renderCatalog(); show('catalog');
+  const sp = tg?.initDataUnsafe?.start_param; if (sp && /^p\d+$/.test(sp)) openProduct(+sp.slice(1));
 })();
 </script>
 </body>
