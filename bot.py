@@ -1,7 +1,7 @@
 """
-STYLE HUB — Backend v5 (FastAPI + SQLAlchemy + Neon/PostgreSQL + Telegram Bot).
-Поддерживает: каталог кроссовок, спорт (футбол, волейбол, баскетбол), классику/туфли и повседневную обувь,
-цены по запросу (0 = уточняется у поставщика/на Дордое), заявки на поиск, WhatsApp, админку и сохранение в БД.
+STYLE HUB — Backend v7 (FastAPI + SQLAlchemy + PostgreSQL/SQLite + Telegram Bot).
+Генерирует 900 популярных моделей обуви и кроссовок в КР/Бишкеке с логикой «Узнать цену»,
+поддерживает редактирование/добавление/удаление товаров, массовое добавление и заявки под запрос.
 """
 import base64
 import hashlib
@@ -29,7 +29,6 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("style_hub")
 BASE = Path(__file__).parent
 
-# ───────────── Переменные окружения ─────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS = {
     x.strip()
@@ -43,14 +42,14 @@ HOOK_SECRET = hashlib.sha256(("hook" + BOT_TOKEN).encode()).hexdigest()[:32]
 DEFAULTS = {
     "shop_name": "STYLE HUB",
     "whatsapp": "",
-    "pay_text": "Сначала находим нужную пару (в том числе на Дордое) и уточняем актуальную цену. Оплата только после согласования с вами.",
-    "delivery_text": "Подбор и доставка по Бишкеку. После заявки уточняем наличие, размер и стоимость, затем связываемся с вами.",
+    "pay_text": "Цену уточняем перед подтверждением заказа. Оплата после согласования модели, размера и стоимости.",
+    "delivery_text": "Подбираем нужную модель в Бишкеке и по КР. Оставьте заявку — найдём вариант, уточним цену и свяжемся с вами.",
     "qr": "",
 }
 
 STATUSES = {
     "new": "🔎 Новый запрос",
-    "searching": "🕵️ Ищем на Дордое",
+    "searching": "🕵️ Ищем вариант",
     "quoted": "💬 Цена отправлена",
     "confirmed": "✅ Подтверждён",
     "paid": "💰 Оплачен",
@@ -60,16 +59,15 @@ STATUSES = {
 }
 
 CLIENT_MSG = {
-    "searching": "🕵️ По запросу #{id} начали поиск пары (проверяем точки и Дордой) и уточняем цену.",
-    "quoted": "💬 По запросу #{id} нашли вариант и цену — менеджер скоро напишет вам детали.",
-    "confirmed": "✅ Заказ #{id} подтверждён! Менеджер свяжется с вами по оплате и доставке.",
+    "searching": "🕵️ По запросу #{id} начали поиск пары и уточняем наличие.",
+    "quoted": "💬 По запросу #{id} нашли вариант и цену — менеджер скоро свяжется с вами.",
+    "confirmed": "✅ Заказ #{id} подтверждён! Менеджер напишет вам по оплате и доставке.",
     "paid": "💰 Оплата по заказу #{id} получена. Спасибо, что выбрали STYLE HUB!",
-    "shipped": "🚚 Заказ #{id} отправлен. Ожидайте курьера.",
-    "done": "🎉 Заказ #{id} доставлен. Спасибо за покупку в STYLE HUB!",
-    "cancel": "❌ Заказ #{id} отменён или модель не найдена. Напишите нам — подберём похожий вариант.",
+    "shipped": "🚚 Заказ #{id} отправлен. Ожидайте доставку.",
+    "done": "🎉 Заказ #{id} доставлен. Спасибо за обращение в STYLE HUB!",
+    "cancel": "❌ Заказ #{id} отменён. Напишите нам, если нужно подобрать другую пару.",
 }
 
-# ───────────── База данных ─────────────
 url = os.getenv("DATABASE_URL", "").strip()
 if not url:
     log.warning("DATABASE_URL не задан — используется локальная SQLite БД (style_hub.db)")
@@ -149,7 +147,6 @@ class Setting(Base):
     value = Column(Text, default="")
 
 
-# ───────────── Утилиты ─────────────
 def clean(v, n):
     return str(v or "").strip()[:n]
 
@@ -190,7 +187,7 @@ def prod_dict(p):
         imgs = [i for i in json.loads(p.images or "[]") if valid_img(i)]
     except Exception:
         imgs = []
-    if not imgs:
+    if not imgs and p.image:
         imgs = [p.image]
     price_val = float(p.price or 0)
     old_val = float(p.old_price or 0)
@@ -200,12 +197,12 @@ def prod_dict(p):
         "title": p.title,
         "brand": p.brand or "",
         "price": price_val,
-        "price_label": "Уточнить цену" if on_request else f"{price_val:,.0f} сом",
+        "price_label": "Узнать цену" if on_request else f"{price_val:,.0f} сом",
         "on_request": on_request,
         "old_price": old_val,
-        "image": imgs[0],
+        "image": imgs[0] if imgs else "",
         "images": imgs,
-        "badge": p.badge or ("Под заказ" if on_request else ""),
+        "badge": p.badge or ("Узнать цену" if on_request else ""),
         "sizes": [x for x in (p.sizes or "").split(",") if x],
         "category": p.category or "",
         "description": p.description or "",
@@ -215,10 +212,14 @@ def prod_dict(p):
 
 
 def order_dict(o):
+    try:
+        parsed_items = json.loads(o.items or "[]")
+    except Exception:
+        parsed_items = []
     return {
         "id": o.id,
         "username": o.username,
-        "items": json.loads(o.items),
+        "items": parsed_items,
         "total": float(o.total or 0),
         "on_request": float(o.total or 0) <= 0,
         "phone": o.phone,
@@ -230,7 +231,6 @@ def order_dict(o):
     }
 
 
-# ───────────── Авторизация Telegram ─────────────
 async def auth(request: Request):
     init = request.headers.get("X-Init-Data", "")
     if not BOT_TOKEN or not init:
@@ -257,7 +257,6 @@ async def admin(who=Depends(auth)):
     return who
 
 
-# ───────────── Telegram Bot API ─────────────
 async def tg(method, **payload):
     if not BOT_TOKEN:
         return None
@@ -270,11 +269,12 @@ async def tg(method, **payload):
 
 
 def order_text(o):
-    items = json.loads(o.items)
-    lines = "\n".join(
-        f"• {esc(i['title'])} — р.{esc(i['size'])} × {i['qty']}" for i in items
-    )
-    total_str = "Уточнить у поставщика / на Дордое" if (o.total or 0) <= 0 else f"{o.total:,.0f} сом"
+    try:
+        items = json.loads(o.items or "[]")
+    except Exception:
+        items = []
+    lines = "\n".join(f"• {esc(i['title'])} — р.{esc(i['size'])} × {i['qty']}" for i in items)
+    total_str = "Узнать цену по запросу" if (o.total or 0) <= 0 else f"{o.total:,.0f} сом"
     summary_for_search = " | ".join(f"{i['title']} (р.{i['size']} ×{i['qty']})" for i in items)
     t = (
         f"🔎 <b>Заявка #{o.id} · STYLE HUB</b> · {STATUSES.get(o.status, o.status)}\n\n"
@@ -282,8 +282,8 @@ def order_text(o):
         f"💰 Цена: <b>{total_str}</b>\n"
         f"👤 Клиент: {esc(o.username)}\n"
         f"📞 Телефон: {esc(o.phone)}\n"
-        f"📍 Район / адрес: {esc(o.address)}\n"
-        f"📦 Для поиска: <code>{esc(summary_for_search)}</code>"
+        f"📍 Город / адрес: {esc(o.address)}\n"
+        f"📦 Поиск: <code>{esc(summary_for_search)}</code>"
     )
     return t + (f"\n💬 Комментарий: {esc(o.comment)}" if o.comment else "")
 
@@ -291,16 +291,19 @@ def order_text(o):
 def order_kb(o):
     b = lambda t, s: {"text": t, "callback_data": f"st:{o.id}:{s}"}
     rows = [
-        [b("🕵️ На Дордое", "searching"), b("💬 Цена дана", "quoted")],
+        [b("🕵️ Ищем", "searching"), b("💬 Цена дана", "quoted")],
         [b("✅ Подтвердить", "confirmed"), b("💰 Оплачен", "paid")],
         [b("🚚 Отправлен", "shipped"), b("🎉 Доставлен", "done")],
         [b("❌ Отменить", "cancel")],
     ]
     w = wa_phone(o.phone)
     if w:
-        items = json.loads(o.items)
+        try:
+            items = json.loads(o.items or "[]")
+        except Exception:
+            items = []
         msg_preview = ", ".join(f"{i['title']} (р.{i['size']})" for i in items)
-        wa_text = quote(f"Здравствуйте! По вашей заявке #{o.id} в STYLE HUB: {msg_preview}. Уточняем наличие и цену.")
+        wa_text = quote(f"Здравствуйте! По заявке #{o.id} в STYLE HUB: {msg_preview}. Уточняем наличие и цену.")
         rows.append([{"text": "💬 Написать клиенту в WhatsApp", "url": f"https://wa.me/{w}?text={wa_text}"}])
     return {"inline_keyboard": rows}
 
@@ -363,55 +366,87 @@ async def on_message(m):
             chat_id=chat,
             reply_markup=kb,
             text=(
-                "Добро пожаловать в <b>STYLE HUB</b> (Бишкек)!\n"
-                "Кроссовки, спорт, классика и повседневная обувь.\n"
-                "Выберите модель в каталоге или напишите нужную пару — мы найдём её, уточним цену и свяжемся с вами."
+                "Добро пожаловать в <b>STYLE HUB</b> (Кыргызстан / Бишкек)!\n"
+                "Кроссовки, спортивная обувь, классика и повседневные пары.\n"
+                "Нажмите «Узнать цену» на любой модели — мы уточним наличие, стоимость и свяжемся с вами."
             ),
             parse_mode="HTML",
         )
 
 
-# ───────────── Каталог: кроссовки, спорт, классика, повседневная обувь ─────────────
 SEED_CATS = [
     ("sneakers", "Кроссовки", 1),
-    ("football", "Футбол", 2),
-    ("volleyball", "Волейбол", 3),
-    ("basketball", "Баскетбол", 4),
-    ("classic", "Классика / Туфли", 5),
-    ("everyday", "Повседневные", 6),
+    ("sport", "Спорт и зал", 2),
+    ("classic", "Классика и туфли", 3),
+    ("everyday", "Повседневные", 4),
 ]
 
-SEED_PRODUCTS = [
-    # Кроссовки (основной акцент)
-    ("Nike Air Jordan 4 Retro", "Jordan", "https://images.unsplash.com/photo-1584735935682-2f2b69dff9d2?w=800", "39,40,41,42,43,44,45", "sneakers", "Культовая модель. Найдём нужную расцветку, уточним цену и сроки по Бишкеку.", "Хит"),
-    ("Nike Dunk Low Retro", "Nike", "https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?w=800", "37,38,39,40,41,42,43,44", "sneakers", "Универсальные кроссовки на каждый день. Подберём размер и сообщим цену.", "Топ"),
-    ("Nike Air Force 1 '07", "Nike", "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=800", "37,38,39,40,41,42,43,44,45", "sneakers", "Классика уличного стиля. Уточним наличие нужного размера и стоимость.", ""),
-    ("New Balance 9060", "New Balance", "https://images.unsplash.com/photo-1539185441755-769473a23570?w=800", "38,39,40,41,42,43,44", "sneakers", "Объёмный силуэт и мягкая посадка. Найдём пару под запрос и рассчитаем цену.", "Хит"),
-    ("New Balance 530", "New Balance", "https://images.unsplash.com/photo-1551107696-a4b0c5a0d9a2?w=800", "37,38,39,40,41,42,43,44", "sneakers", "Лёгкие кроссовки для города. Цену уточняем перед подтверждением.", ""),
-    ("Adidas Yeezy Boost 350 V2", "Adidas", "https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=800", "39,40,41,42,43,44,45", "sneakers", "Комфортный трикотажный верх. Проверим варианты и уточним актуальную цену.", ""),
-
-    # Футбол
-    ("Nike Mercurial Vapor Бутсы", "Nike", "https://images.unsplash.com/photo-1511886929837-354d827aae26?w=800", "39,40,41,42,43,44", "football", "Для поля и зала. Уточним наличие модели, шипов/подошвы и цену.", "Спорт"),
-    ("Adidas Predator Футбольная пара", "Adidas", "https://images.unsplash.com/photo-1579952363873-27f3bade9f55?w=800", "39,40,41,42,43,44", "football", "Уверенный контроль мяча и посадка. Подберём размер и сообщим цену.", ""),
-    ("Футбольные сороконожки / бампы", "Sport Line", "https://images.unsplash.com/photo-1543326727-cf6c39e8f84c?w=800", "39,40,41,42,43,44,45", "football", "Подходят для искусственного покрытия и зала. Цену уточняем под запрос.", ""),
-
-    # Волейбол
-    ("Волейбольные кроссовки Court Pro", "Asics / Mizuno style", "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800", "38,39,40,41,42,43,44,45", "volleyball", "Хорошее сцепление с залом и устойчивость при прыжках. Уточним цену и размер.", "Зал"),
-    ("Волейбольная пара Indoor Grip", "Sport Line", "https://images.unsplash.com/photo-1606107557195-0e29a4b5b4aa?w=800", "38,39,40,41,42,43,44", "volleyball", "Лёгкая модель для тренировок и игр в зале. Цену сообщим после поиска.", ""),
-
-    # Баскетбол
-    ("Баскетбольные кроссовки High Court", "Jordan / Nike style", "https://images.unsplash.com/photo-1514989940723-e8e51635b782?w=800", "40,41,42,43,44,45,46", "basketball", "Фиксация стопы и амортизация для площадки. Найдём пару и уточним стоимость.", "Баскетбол"),
-    ("Баскетбольная пара Street Hoops", "Sport Line", "https://images.unsplash.com/photo-1600185365926-3a2ce3cdb9eb?w=800", "40,41,42,43,44,45", "basketball", "Для зала и уличного асфальта. Актуальную цену уточняем под заказ.", ""),
-
-    # Классика и туфли
-    ("Классические кожаные туфли Derby", "Classic", "https://images.unsplash.com/photo-1614252235316-8c857d38b5f4?w=800", "39,40,41,42,43,44", "classic", "Строгий силуэт для встреч, учёбы и мероприятий. Уточним наличие и цену.", "Классика"),
-    ("Туфли Oxford / Деловая пара", "Classic", "https://images.unsplash.com/photo-1533867617858-e7b97e060509?w=800", "39,40,41,42,43,44", "classic", "Аккуратная классическая модель. Подберём размер и сообщим цену.", ""),
-    ("Лоферы на каждый день", "Smart Casual", "https://images.unsplash.com/photo-1560343090-f0409e92791a?w=800", "38,39,40,41,42,43,44", "classic", "Удобная посадка без шнурков. Найдём вариант под запрос и уточним цену.", ""),
-
-    # Обычные / повседневные
-    ("Повседневные кеды / кроссовки Casual", "Everyday", "https://images.unsplash.com/photo-1525966222134-fcfa99b8ae77?w=800", "37,38,39,40,41,42,43,44", "everyday", "Простая и удобная пара на каждый день. Уточним наличие и цену.", "На каждый день"),
-    ("Городские кроссовки Comfort Walk", "Everyday", "https://images.unsplash.com/photo-1560769629-975ec94e6a86?w=800", "37,38,39,40,41,42,43,44", "everyday", "Практичная модель для прогулок по городу. Цену уточняем под запрос.", ""),
+PHOTO_POOL = [
+    "https://images.unsplash.com/photo-1584735935682-2f2b69dff9d2?w=800",
+    "https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?w=800",
+    "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=800",
+    "https://images.unsplash.com/photo-1539185441755-769473a23570?w=800",
+    "https://images.unsplash.com/photo-1551107696-a4b0c5a0d9a2?w=800",
+    "https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=800",
+    "https://images.unsplash.com/photo-1514989940723-e8e51635b782?w=800",
+    "https://images.unsplash.com/photo-1600185365926-3a2ce3cdb9eb?w=800",
+    "https://images.unsplash.com/photo-1525966222134-fcfa99b8ae77?w=800",
+    "https://images.unsplash.com/photo-1560769629-975ec94e6a86?w=800",
+    "https://images.unsplash.com/photo-1560343090-f0409e92791a?w=800",
+    "https://images.unsplash.com/photo-1614252235316-8c857d38b5f4?w=800",
 ]
+
+BASE_TEMPLATES = [
+    ("Mizuno Wave Momentum", "Mizuno · Япония", "sport", "39,40,41,42,43,44,45", "Спортивная модель с эмблемой Runbird для зала, волейбола и тренировок."),
+    ("Mizuno Wave Lightning", "Mizuno · Япония", "sport", "39,40,41,42,43,44,45", "Лёгкая игровая пара для волейбола и зала. Цену уточняем по запросу."),
+    ("Loro Piana Minimalist Walk", "Loro Piana · Италия", "classic", "39,40,41,42,43,44", "Лаконичная модель без крупных внешних логотипов под классику и повседневный стиль."),
+    ("Gucci Screener / Ace", "Gucci · Италия", "classic", "38,39,40,41,42,43,44", "Популярная модель в классическом и повседневном стиле. Уточним наличие и цену."),
+    ("Guess 1981 Кеды", "Guess · США", "everyday", "38,39,40,41,42,43,44", "Базовые кеды с фирменным знаком 1981 для города, джинсов и повседневной носки."),
+    ("Louis Vuitton Run Away", "Louis Vuitton · Франция", "sneakers", "39,40,41,42,43,44", "Спортивно-классические кроссовки с фирменными деталями. Уточним размер и цену."),
+    ("Nike Court Royale 2 Low", "Nike · США", "classic", "38,39,40,41,42,43,44", "Классические низкие кеды с белым Swoosh для повседневного образа."),
+    ("Nike Air Max 90", "Nike · США", "sneakers", "39,40,41,42,43,44,45", "Культовая модель с воздушной вставкой Air в пятке и логотипом Swoosh."),
+    ("Nike Invincible Run / React", "Nike · США", "sport", "39,40,41,42,43,44,45", "Мягкая беговая и тренировочная модель с амортизацией и серебристым Swoosh."),
+    ("Nike Zoom HyperAce / Зал", "Nike · США", "sport", "39,40,41,42,43,44,45", "Игровая модель для зала с хорошей фиксацией стопы для волейбола и баскетбола."),
+    ("Nike Dunk Low Retro", "Nike · США", "sneakers", "37,38,39,40,41,42,43,44", "Востребованная в КР модель кроссовок на каждый день. Уточним наличие и цену."),
+    ("Nike Air Force 1 '07", "Nike · США", "sneakers", "37,38,39,40,41,42,43,44,45", "Базовая модель кроссовок для города. Подберём размер и сообщим цену."),
+    ("Nike Air Jordan 4 Retro", "Jordan · США", "sneakers", "39,40,41,42,43,44,45", "Популярная линейка кроссовок в Бишкеке. Уточним цену и доступные размеры."),
+    ("New Balance 9060", "New Balance · США", "sneakers", "38,39,40,41,42,43,44", "Объёмный силуэт и комфорт на каждый день. Найдём пару и уточним стоимость."),
+    ("New Balance 530", "New Balance · США", "everyday", "37,38,39,40,41,42,43,44", "Лёгкая модель на каждый день. Уточним наличие нужного размера и цену."),
+    ("Adidas Yeezy Boost 350 V2", "Adidas · Германия", "sneakers", "39,40,41,42,43,44,45", "Популярная модель для повседневной носки. Цену уточняем по запросу."),
+    ("Классические чёрные полуботинки", "Classic Style", "classic", "39,40,41,42,43,44", "Аккуратные чёрные полуботинки без броских логотипов под классику и офис."),
+    ("Повседневные кроссовки Basic", "STYLE HUB · База", "everyday", "37,38,39,40,41,42,43,44", "Универсальная повседневная модель. Подберём вариант и сообщим цену."),
+]
+
+COLORWAYS = [
+    "White / Black", "Triple Black", "Triple White", "Grey / White", "Navy / White",
+    "Red / Black", "Beige / Cream", "Olive / Black", "Blue / White", "Sand / Brown",
+]
+
+
+def build_900_catalog(count: int = 900):
+    items = []
+    for idx in range(count):
+        base_title, brand, cat, sizes, desc = BASE_TEMPLATES[idx % len(BASE_TEMPLATES)]
+        cycle_num = (idx // len(BASE_TEMPLATES)) + 1
+        color = COLORWAYS[(idx // len(BASE_TEMPLATES)) % len(COLORWAYS)]
+        title = f"{base_title} · {color}" if cycle_num > 1 else base_title
+        img = PHOTO_POOL[idx % len(PHOTO_POOL)]
+        items.append(
+            Product(
+                title=clean(title, 120),
+                brand=clean(brand, 60),
+                price=0.0,
+                old_price=0.0,
+                image=img,
+                images=json.dumps([img]),
+                sizes=sizes,
+                category=cat,
+                description=clean(f"{desc} Наличие и цену уточняем под запрос в Бишкеке / КР.", 1500),
+                badge="Узнать цену",
+                active=True,
+            )
+        )
+    return items
 
 
 @asynccontextmanager
@@ -429,24 +464,7 @@ async def lifespan(app):
         if not (await s.execute(select(Category.slug).limit(1))).first():
             s.add_all([Category(slug=a, name=b, pos=c) for a, b, c in SEED_CATS])
         if not (await s.execute(select(Product.id).limit(1))).first():
-            s.add_all(
-                [
-                    Product(
-                        title=title,
-                        brand=brand,
-                        price=0.0,
-                        old_price=0.0,
-                        image=img,
-                        images=json.dumps([img]),
-                        sizes=sizes,
-                        category=cat,
-                        description=desc,
-                        badge=badge,
-                        active=True,
-                    )
-                    for title, brand, img, sizes, cat, desc, badge in SEED_PRODUCTS
-                ]
-            )
+            s.add_all(build_900_catalog(900))
         await s.commit()
 
     if BOT_TOKEN and PUBLIC_URL:
@@ -461,7 +479,6 @@ app = FastAPI(title="STYLE HUB — Бишкек", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-# ───────────── Публичные эндпоинты ─────────────
 @app.get("/")
 async def index():
     return FileResponse(BASE / "index.html", headers={"Cache-Control": "no-cache"})
@@ -503,8 +520,8 @@ async def create_order(d: dict, db: AsyncSession = Depends(get_db), who=Depends(
     phone, address, comment = clean(d.get("phone"), 32), clean(d.get("address"), 200), clean(d.get("comment"), 500)
     if len(re.sub(r"\D", "", phone)) < 9:
         raise HTTPException(400, "Укажите корректный номер телефона")
-    if len(address) < 3:
-        raise HTTPException(400, "Укажите район или адрес в Бишкеке")
+    if len(address) < 2:
+        raise HTTPException(400, "Укажите город или район")
     items = d.get("items")
     if not isinstance(items, list) or not items or len(items) > 20:
         raise HTTPException(400, "Выберите хотя бы одну модель")
@@ -560,7 +577,6 @@ async def my_orders(db: AsyncSession = Depends(get_db), who=Depends(auth)):
     return [order_dict(o) for o in rows]
 
 
-# ───────────── Админ ─────────────
 @app.get("/api/admin/orders")
 async def admin_orders(db: AsyncSession = Depends(get_db), _=Depends(admin)):
     rows = (await db.execute(select(Order).order_by(Order.id.desc()).limit(150))).scalars()
@@ -577,7 +593,7 @@ async def admin_status(oid: int, d: dict, db: AsyncSession = Depends(get_db), _=
 
 @app.get("/api/admin/products")
 async def admin_products(db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    rows = (await db.execute(select(Product).order_by(Product.id.desc()))).scalars()
+    rows = (await db.execute(select(Product).order_by(Product.id.desc()).limit(300))).scalars()
     return [prod_dict(p) for p in rows]
 
 
@@ -611,18 +627,54 @@ async def admin_save_product(d: dict, db: AsyncSession = Depends(get_db), _=Depe
         db.add(p)
 
     p.title = title
-    p.brand = clean(d.get("brand"), 40)
+    p.brand = clean(d.get("brand"), 60)
     p.price = price
     p.old_price = old
     p.sizes = sizes
     p.image = imgs[0]
     p.images = json.dumps(imgs)
-    p.badge = clean(d.get("badge"), 16)
+    badge_clean = clean(d.get("badge"), 20)
+    p.badge = badge_clean if badge_clean else ("Узнать цену" if price <= 0 else "")
     p.category = clean(d.get("category"), 40)
     p.description = clean(d.get("description"), 1500)
     p.active = bool(d.get("active", True))
     await db.commit()
     return prod_dict(p)
+
+
+@app.post("/api/admin/products/bulk")
+async def admin_bulk_products(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    """Массовое добавление моделей строками: Название | Бренд | Категория | URL_фото | Размеры."""
+    added = 0
+    raw_text = str(d.get("lines") or "")
+    default_img = PHOTO_POOL[0]
+    for idx, line in enumerate(raw_text.splitlines()[:300]):
+        parts = [x.strip() for x in line.split("|")]
+        if not parts or not parts[0]:
+            continue
+        title = clean(parts[0], 120)
+        brand = clean(parts[1] if len(parts) > 1 else "", 60)
+        cat = clean(parts[2] if len(parts) > 2 else "sneakers", 40)
+        img = parts[3] if len(parts) > 3 and valid_img(parts[3]) else PHOTO_POOL[idx % len(PHOTO_POOL)]
+        sizes = clean(parts[4] if len(parts) > 4 and parts[4] else "39,40,41,42,43,44", 120)
+        db.add(
+            Product(
+                title=title,
+                brand=brand,
+                price=0.0,
+                old_price=0.0,
+                image=img or default_img,
+                images=json.dumps([img or default_img]),
+                sizes=sizes,
+                category=cat,
+                description="Подбор под запрос в Бишкеке / КР. Наличие и цену уточняем.",
+                badge="Узнать цену",
+                active=True,
+            )
+        )
+        added += 1
+    await db.commit()
+    return {"added": added}
 
 
 @app.delete("/api/admin/products/{pid}")
@@ -689,7 +741,6 @@ async def admin_settings(d: dict, db: AsyncSession = Depends(get_db), _=Depends(
     return s
 
 
-# ───────────── Вебхук Telegram ─────────────
 @app.post("/tg/webhook/{secret}")
 async def webhook(secret: str, request: Request):
     if not hmac.compare_digest(secret, HOOK_SECRET):
