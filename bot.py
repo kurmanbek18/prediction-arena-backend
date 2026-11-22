@@ -1,7 +1,14 @@
 """
-STYLE HUB — Backend v7 (FastAPI + SQLAlchemy + PostgreSQL/SQLite + Telegram Bot).
-Генерирует 900 популярных моделей обуви и кроссовок в КР/Бишкеке с логикой «Узнать цену»,
-поддерживает редактирование/добавление/удаление товаров, массовое добавление и заявки под запрос.
+STYLE HUB — Backend v8 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
+
+Что нового по сравнению с v7:
+  * Никакой «накрутки» каталога: фейковые 900 карточек больше не создаются.
+    Каталог до 2000+ реальных позиций загружается через /api/admin/import (CSV / JSON / список)
+    пачками по 200 строк, с upsert по артикулу (повторный импорт обновляет, а не дублирует).
+  * Серверный поиск и фильтры с пагинацией (/api/products) — фронтенд больше не тянет весь каталог.
+  * Избранное (синхронизация с Telegram-аккаунтом), «Топ недели», бренды, фильтр «с ценой / по запросу».
+  * Защита заявки от двойной отправки (req_id) и от спама, заявка без выбранной модели («Подобрать пару»).
+  * Автомиграция колонок и индексов для уже существующей БД, ничего не нужно удалять руками.
 """
 import base64
 import hashlib
@@ -20,8 +27,13 @@ import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
-from sqlalchemy import Boolean, Column, Float, Integer, LargeBinary, String, Text, delete, select, text, update
+from sqlalchemy import (
+    Boolean, Column, Float, Integer, LargeBinary, String, Text, UniqueConstraint,
+    case, delete, func, or_, select, text, update,
+)
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
 
@@ -38,12 +50,13 @@ ADMIN_IDS = {
 PUBLIC_URL = (os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
 APP_LINK = os.getenv("APP_LINK", "").strip().rstrip("/")
 HOOK_SECRET = hashlib.sha256(("hook" + BOT_TOKEN).encode()).hexdigest()[:32]
+AUTH_MAX_AGE = 72 * 3600  # initData живёт дольше суток, если Mini App долго не закрывали
 
 DEFAULTS = {
     "shop_name": "STYLE HUB",
     "whatsapp": "",
-    "pay_text": "Цену уточняем перед подтверждением заказа. Оплата после согласования модели, размера и стоимости.",
-    "delivery_text": "Подбираем нужную модель в Бишкеке и по КР. Оставьте заявку — найдём вариант, уточним цену и свяжемся с вами.",
+    "pay_text": "Цену называем до оплаты. Оплата только после того, как вы согласуете модель, размер и стоимость.",
+    "delivery_text": "Найдём нужную пару в Бишкеке и по КР, уточним наличие у поставщиков и напишем вам в Telegram или WhatsApp.",
     "qr": "",
 }
 
@@ -68,6 +81,9 @@ CLIENT_MSG = {
     "cancel": "❌ Заказ #{id} отменён. Напишите нам, если нужно подобрать другую пару.",
 }
 
+# ----------------------------------------------------------------------------------------------
+# База данных
+# ----------------------------------------------------------------------------------------------
 url = os.getenv("DATABASE_URL", "").strip()
 if not url:
     log.warning("DATABASE_URL не задан — используется локальная SQLite БД (style_hub.db)")
@@ -77,13 +93,14 @@ else:
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+IS_PG = "asyncpg" in url
 kw = {"pool_pre_ping": True}
-if "asyncpg" in url:
+if IS_PG:
     kw.update(
-        connect_args={"ssl": True, "statement_cache_size": 0},
+        connect_args={"ssl": True, "statement_cache_size": 0, "timeout": 20},
         pool_size=5,
         max_overflow=5,
-        pool_recycle=300,
+        pool_recycle=240,  # Neon усыпляет соединения — обновляем заранее
     )
 
 engine = create_async_engine(url, **kw)
@@ -99,17 +116,23 @@ async def get_db():
 class Product(Base):
     __tablename__ = "shop_products"
     id = Column(Integer, primary_key=True)
+    sku = Column(String, index=True, default="")
     title = Column(String, nullable=False)
     brand = Column(String, default="")
+    color = Column(String, default="")
+    tags = Column(String, default="")
     price = Column(Float, default=0.0)
     old_price = Column(Float, default=0.0)
-    image = Column(String, nullable=False)
+    image = Column(String, default="")
     images = Column(Text, default="[]")
     badge = Column(String, default="")
     sizes = Column(String, default="39,40,41,42,43,44,45")
-    category = Column(String, default="")
+    category = Column(String, default="", index=True)
     description = Column(Text, default="")
-    active = Column(Boolean, default=True)
+    search = Column(Text, default="")
+    active = Column(Boolean, default=True, index=True)
+    is_top = Column(Boolean, default=False, index=True)
+    top_pos = Column(Integer, default=0)
     created = Column(Float, default=lambda: time.time())
 
 
@@ -138,6 +161,7 @@ class Order(Base):
     address = Column(String)
     comment = Column(String, default="")
     status = Column(String, default="new")
+    req_id = Column(String, default="", index=True)
     created = Column(Float, default=lambda: time.time())
 
 
@@ -147,12 +171,32 @@ class Setting(Base):
     value = Column(Text, default="")
 
 
+class Favorite(Base):
+    __tablename__ = "shop_favorites"
+    id = Column(Integer, primary_key=True)
+    uid = Column(String, index=True, nullable=False)
+    pid = Column(Integer, index=True, nullable=False)
+    created = Column(Float, default=lambda: time.time())
+    __table_args__ = (UniqueConstraint("uid", "pid", name="uq_shop_fav"),)
+
+
+# ----------------------------------------------------------------------------------------------
+# Утилиты
+# ----------------------------------------------------------------------------------------------
 def clean(v, n):
     return str(v or "").strip()[:n]
 
 
 def esc(v):
     return html.escape(str(v or ""))
+
+
+def esc_like(s):
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def norm(s):
+    return re.sub(r"\s+", " ", str(s or "").lower().replace("ё", "е")).strip()
 
 
 def wa_phone(phone):
@@ -168,6 +212,90 @@ def valid_img(u):
     return isinstance(u, str) and (u.startswith("/img/") or u.startswith("https://")) and len(u) < 500
 
 
+def to_num(v, default=0.0):
+    """'12 500', '12,5', '12500.00', None, '' -> float. Нечисло -> ValueError."""
+    if v is None or v == "":
+        return default
+    if isinstance(v, bool):
+        raise ValueError("bool")
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = re.sub(r"[\s\u00a0]", "", str(v))
+    s = re.sub(r"(сом|som|kgs|c)$", "", s, flags=re.I)
+    if not s:
+        return default
+    if "," in s and "." in s:
+        s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".") if re.fullmatch(r"\d+,\d{1,2}", s) else s.replace(",", "")
+    return float(s)
+
+
+def parse_sizes(v):
+    raw = ",".join(map(str, v)) if isinstance(v, list) else str(v or "")
+    out = []
+    for part in re.split(r"[,;/\s]+", raw.strip()):
+        if not part:
+            continue
+        m = re.fullmatch(r"(\d{2})-(\d{2})", part)
+        if m and int(m[1]) <= int(m[2]) <= 60:
+            out += [str(i) for i in range(int(m[1]), int(m[2]) + 1)]
+        else:
+            out.append(part[:6])
+    uniq = []
+    for x in out:
+        if x not in uniq:
+            uniq.append(x)
+    return ",".join(uniq[:40])
+
+
+def parse_images(v):
+    if isinstance(v, list):
+        parts = [str(x).strip() for x in v]
+    else:
+        parts = [x.strip() for x in re.split(r"[\n\r|;\s]+", str(v or ""))]
+    out = []
+    for u in parts:
+        if valid_img(u) and u not in out:
+            out.append(u)
+    return out[:12]
+
+
+def to_bool(v, default=False):
+    if v is None or v == "":
+        return default
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "да", "+", "on", "x")
+
+
+BRAND_ALIASES = {
+    "nike": "найк", "adidas": "адидас", "new balance": "нью баланс ньюбаланс", "mizuno": "мизуно",
+    "gucci": "гуччи", "jordan": "джордан", "puma": "пума", "reebok": "рибок", "asics": "асикс",
+    "vans": "вансы ванс", "converse": "конверс", "guess": "гесс гэс", "louis vuitton": "луи виттон",
+    "loro piana": "лоро пиана", "yeezy": "изи йизи", "balenciaga": "баленсиага", "fila": "фила",
+    "under armour": "андер армор", "skechers": "скетчерс", "salomon": "саломон", "timberland": "тимберленд",
+}
+
+
+def make_search(title, brand, color, tags, cat_name, sku, sizes_csv):
+    base = norm(" ".join(str(x or "") for x in (title, brand, color, tags, cat_name, sku)))
+    alias = " ".join(ru for en, ru in BRAND_ALIASES.items() if en in base)
+    sizes = " ".join(f"size{x}" for x in (sizes_csv or "").split(",") if x)
+    return (base + " " + alias + " " + sizes).strip()[:1800] or "-"
+
+
+def brand_name(b):
+    return (b or "").split("·")[0].strip()
+
+
+def money(v):
+    return f"{float(v):,.0f}".replace(",", " ")
+
+
+# ----------------------------------------------------------------------------------------------
+# Сериализация
+# ----------------------------------------------------------------------------------------------
 async def get_settings(db):
     s = dict(DEFAULTS)
     for r in (await db.execute(select(Setting))).scalars():
@@ -187,26 +315,30 @@ def prod_dict(p):
         imgs = [i for i in json.loads(p.images or "[]") if valid_img(i)]
     except Exception:
         imgs = []
-    if not imgs and p.image:
+    if not imgs and valid_img(p.image):
         imgs = [p.image]
     price_val = float(p.price or 0)
-    old_val = float(p.old_price or 0)
     on_request = price_val <= 0
     return {
         "id": p.id,
+        "sku": p.sku or "",
         "title": p.title,
         "brand": p.brand or "",
+        "brand_name": brand_name(p.brand),
+        "color": p.color or "",
+        "tags": p.tags or "",
         "price": price_val,
-        "price_label": "Узнать цену" if on_request else f"{price_val:,.0f} сом",
+        "price_label": "Цена по запросу" if on_request else f"{money(price_val)} сом",
         "on_request": on_request,
-        "old_price": old_val,
+        "old_price": float(p.old_price or 0),
         "image": imgs[0] if imgs else "",
         "images": imgs,
-        "badge": p.badge or ("Узнать цену" if on_request else ""),
+        "badge": p.badge or "",
         "sizes": [x for x in (p.sizes or "").split(",") if x],
         "category": p.category or "",
         "description": p.description or "",
         "active": bool(p.active),
+        "is_top": bool(p.is_top),
         "created": p.created,
     }
 
@@ -231,6 +363,9 @@ def order_dict(o):
     }
 
 
+# ----------------------------------------------------------------------------------------------
+# Авторизация Telegram
+# ----------------------------------------------------------------------------------------------
 async def auth(request: Request):
     init = request.headers.get("X-Init-Data", "")
     if not BOT_TOKEN or not init:
@@ -242,12 +377,12 @@ async def auth(request: Request):
     if not hmac.compare_digest(hmac.new(secret, check.encode(), hashlib.sha256).hexdigest(), got):
         raise HTTPException(401, "Ошибка авторизации Telegram")
     try:
-        old = time.time() - int(data.get("auth_date", 0)) > 86400
+        old = time.time() - int(data.get("auth_date", 0)) > AUTH_MAX_AGE
         u = json.loads(data["user"])
     except Exception:
         raise HTTPException(401, "Ошибка авторизации Telegram")
     if old:
-        raise HTTPException(401, "Сессия устарела, откройте магазин заново")
+        raise HTTPException(401, "Сессия устарела — закройте и снова откройте магазин в Telegram")
     return {"id": str(u["id"]), "name": u.get("first_name") or u.get("username") or "Клиент"}
 
 
@@ -257,6 +392,9 @@ async def admin(who=Depends(auth)):
     return who
 
 
+# ----------------------------------------------------------------------------------------------
+# Telegram-бот
+# ----------------------------------------------------------------------------------------------
 async def tg(method, **payload):
     if not BOT_TOKEN:
         return None
@@ -268,23 +406,30 @@ async def tg(method, **payload):
         log.warning("tg %s failed: %s", method, e)
 
 
-def order_text(o):
+def order_items(o):
     try:
-        items = json.loads(o.items or "[]")
+        return json.loads(o.items or "[]")
     except Exception:
-        items = []
-    lines = "\n".join(f"• {esc(i['title'])} — р.{esc(i['size'])} × {i['qty']}" for i in items)
-    total_str = "Узнать цену по запросу" if (o.total or 0) <= 0 else f"{o.total:,.0f} сом"
-    summary_for_search = " | ".join(f"{i['title']} (р.{i['size']} ×{i['qty']})" for i in items)
+        return []
+
+
+def order_text(o):
+    items = order_items(o)
+    lines = "\n".join(f"• {esc(i.get('title'))} — р.{esc(i.get('size'))} × {i.get('qty')}" for i in items)
+    if not lines:
+        lines = "• Свободный запрос — подобрать пару (см. комментарий)"
+    total_str = "по запросу (уточняем)" if (o.total or 0) <= 0 else f"{o.total:,.0f} сом"
+    summary = " | ".join(f"{i.get('title')} (р.{i.get('size')} ×{i.get('qty')})" for i in items)
     t = (
         f"🔎 <b>Заявка #{o.id} · STYLE HUB</b> · {STATUSES.get(o.status, o.status)}\n\n"
         f"{lines}\n\n"
         f"💰 Цена: <b>{total_str}</b>\n"
         f"👤 Клиент: {esc(o.username)}\n"
         f"📞 Телефон: {esc(o.phone)}\n"
-        f"📍 Город / адрес: {esc(o.address)}\n"
-        f"📦 Поиск: <code>{esc(summary_for_search)}</code>"
+        f"📍 Город / адрес: {esc(o.address)}"
     )
+    if summary:
+        t += f"\n📦 Поиск: <code>{esc(summary)}</code>"
     return t + (f"\n💬 Комментарий: {esc(o.comment)}" if o.comment else "")
 
 
@@ -298,12 +443,8 @@ def order_kb(o):
     ]
     w = wa_phone(o.phone)
     if w:
-        try:
-            items = json.loads(o.items or "[]")
-        except Exception:
-            items = []
-        msg_preview = ", ".join(f"{i['title']} (р.{i['size']})" for i in items)
-        wa_text = quote(f"Здравствуйте! По заявке #{o.id} в STYLE HUB: {msg_preview}. Уточняем наличие и цену.")
+        preview = ", ".join(f"{i.get('title')} (р.{i.get('size')})" for i in order_items(o)) or "подбор пары"
+        wa_text = quote(f"Здравствуйте! По заявке #{o.id} в STYLE HUB: {preview}. Уточняем наличие и цену.")
         rows.append([{"text": "💬 Написать клиенту в WhatsApp", "url": f"https://wa.me/{w}?text={wa_text}"}])
     return {"inline_keyboard": rows}
 
@@ -366,14 +507,17 @@ async def on_message(m):
             chat_id=chat,
             reply_markup=kb,
             text=(
-                "Добро пожаловать в <b>STYLE HUB</b> (Кыргызстан / Бишкек)!\n"
-                "Кроссовки, спортивная обувь, классика и повседневные пары.\n"
-                "Нажмите «Узнать цену» на любой модели — мы уточним наличие, стоимость и свяжемся с вами."
+                "Добро пожаловать в <b>STYLE HUB</b> — обувь и кроссовки в Бишкеке и по Кыргызстану.\n"
+                "Выберите модель и размер, оставьте запрос — мы уточним наличие и цену "
+                "и напишем вам в Telegram или WhatsApp."
             ),
             parse_mode="HTML",
         )
 
 
+# ----------------------------------------------------------------------------------------------
+# Старт: таблицы, миграции, индексы
+# ----------------------------------------------------------------------------------------------
 SEED_CATS = [
     ("sneakers", "Кроссовки", 1),
     ("sport", "Спорт и зал", 2),
@@ -381,92 +525,73 @@ SEED_CATS = [
     ("everyday", "Повседневные", 4),
 ]
 
-PHOTO_POOL = [
-    "https://images.unsplash.com/photo-1584735935682-2f2b69dff9d2?w=800",
-    "https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?w=800",
-    "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=800",
-    "https://images.unsplash.com/photo-1539185441755-769473a23570?w=800",
-    "https://images.unsplash.com/photo-1551107696-a4b0c5a0d9a2?w=800",
-    "https://images.unsplash.com/photo-1608231387042-66d1773070a5?w=800",
-    "https://images.unsplash.com/photo-1514989940723-e8e51635b782?w=800",
-    "https://images.unsplash.com/photo-1600185365926-3a2ce3cdb9eb?w=800",
-    "https://images.unsplash.com/photo-1525966222134-fcfa99b8ae77?w=800",
-    "https://images.unsplash.com/photo-1560769629-975ec94e6a86?w=800",
-    "https://images.unsplash.com/photo-1560343090-f0409e92791a?w=800",
-    "https://images.unsplash.com/photo-1614252235316-8c857d38b5f4?w=800",
-]
 
-BASE_TEMPLATES = [
-    ("Mizuno Wave Momentum", "Mizuno · Япония", "sport", "39,40,41,42,43,44,45", "Спортивная модель с эмблемой Runbird для зала, волейбола и тренировок."),
-    ("Mizuno Wave Lightning", "Mizuno · Япония", "sport", "39,40,41,42,43,44,45", "Лёгкая игровая пара для волейбола и зала. Цену уточняем по запросу."),
-    ("Loro Piana Minimalist Walk", "Loro Piana · Италия", "classic", "39,40,41,42,43,44", "Лаконичная модель без крупных внешних логотипов под классику и повседневный стиль."),
-    ("Gucci Screener / Ace", "Gucci · Италия", "classic", "38,39,40,41,42,43,44", "Популярная модель в классическом и повседневном стиле. Уточним наличие и цену."),
-    ("Guess 1981 Кеды", "Guess · США", "everyday", "38,39,40,41,42,43,44", "Базовые кеды с фирменным знаком 1981 для города, джинсов и повседневной носки."),
-    ("Louis Vuitton Run Away", "Louis Vuitton · Франция", "sneakers", "39,40,41,42,43,44", "Спортивно-классические кроссовки с фирменными деталями. Уточним размер и цену."),
-    ("Nike Court Royale 2 Low", "Nike · США", "classic", "38,39,40,41,42,43,44", "Классические низкие кеды с белым Swoosh для повседневного образа."),
-    ("Nike Air Max 90", "Nike · США", "sneakers", "39,40,41,42,43,44,45", "Культовая модель с воздушной вставкой Air в пятке и логотипом Swoosh."),
-    ("Nike Invincible Run / React", "Nike · США", "sport", "39,40,41,42,43,44,45", "Мягкая беговая и тренировочная модель с амортизацией и серебристым Swoosh."),
-    ("Nike Zoom HyperAce / Зал", "Nike · США", "sport", "39,40,41,42,43,44,45", "Игровая модель для зала с хорошей фиксацией стопы для волейбола и баскетбола."),
-    ("Nike Dunk Low Retro", "Nike · США", "sneakers", "37,38,39,40,41,42,43,44", "Востребованная в КР модель кроссовок на каждый день. Уточним наличие и цену."),
-    ("Nike Air Force 1 '07", "Nike · США", "sneakers", "37,38,39,40,41,42,43,44,45", "Базовая модель кроссовок для города. Подберём размер и сообщим цену."),
-    ("Nike Air Jordan 4 Retro", "Jordan · США", "sneakers", "39,40,41,42,43,44,45", "Популярная линейка кроссовок в Бишкеке. Уточним цену и доступные размеры."),
-    ("New Balance 9060", "New Balance · США", "sneakers", "38,39,40,41,42,43,44", "Объёмный силуэт и комфорт на каждый день. Найдём пару и уточним стоимость."),
-    ("New Balance 530", "New Balance · США", "everyday", "37,38,39,40,41,42,43,44", "Лёгкая модель на каждый день. Уточним наличие нужного размера и цену."),
-    ("Adidas Yeezy Boost 350 V2", "Adidas · Германия", "sneakers", "39,40,41,42,43,44,45", "Популярная модель для повседневной носки. Цену уточняем по запросу."),
-    ("Классические чёрные полуботинки", "Classic Style", "classic", "39,40,41,42,43,44", "Аккуратные чёрные полуботинки без броских логотипов под классику и офис."),
-    ("Повседневные кроссовки Basic", "STYLE HUB · База", "everyday", "37,38,39,40,41,42,43,44", "Универсальная повседневная модель. Подберём вариант и сообщим цену."),
-]
-
-COLORWAYS = [
-    "White / Black", "Triple Black", "Triple White", "Grey / White", "Navy / White",
-    "Red / Black", "Beige / Cream", "Olive / Black", "Blue / White", "Sand / Brown",
-]
+async def migrate():
+    """Добавляет новые колонки/индексы в уже существующую БД (create_all этого не делает)."""
+    ine = "IF NOT EXISTS " if IS_PG else ""
+    false = "FALSE" if IS_PG else "0"
+    cols = [
+        ("shop_products", "images", "TEXT DEFAULT '[]'"),
+        ("shop_products", "badge", "VARCHAR DEFAULT ''"),
+        ("shop_products", "sku", "VARCHAR DEFAULT ''"),
+        ("shop_products", "color", "VARCHAR DEFAULT ''"),
+        ("shop_products", "tags", "VARCHAR DEFAULT ''"),
+        ("shop_products", "search", "TEXT DEFAULT ''"),
+        ("shop_products", "is_top", f"BOOLEAN DEFAULT {false}"),
+        ("shop_products", "top_pos", "INTEGER DEFAULT 0"),
+        ("shop_orders", "req_id", "VARCHAR DEFAULT ''"),
+    ]
+    for table, col, ddl in cols:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {ine}{col} {ddl}"))
+        except Exception:
+            pass  # колонка уже есть
+    idx = [
+        ("ix_shop_products_sku", "shop_products", "sku"),
+        ("ix_shop_products_category", "shop_products", "category"),
+        ("ix_shop_products_active", "shop_products", "active"),
+        ("ix_shop_products_is_top", "shop_products", "is_top"),
+        ("ix_shop_orders_req_id", "shop_orders", "req_id"),
+    ]
+    for name, table, col in idx:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({col})"))
+        except Exception as e:
+            log.warning("index %s: %s", name, e)
 
 
-def build_900_catalog(count: int = 900):
-    items = []
-    for idx in range(count):
-        base_title, brand, cat, sizes, desc = BASE_TEMPLATES[idx % len(BASE_TEMPLATES)]
-        cycle_num = (idx // len(BASE_TEMPLATES)) + 1
-        color = COLORWAYS[(idx // len(BASE_TEMPLATES)) % len(COLORWAYS)]
-        title = f"{base_title} · {color}" if cycle_num > 1 else base_title
-        img = PHOTO_POOL[idx % len(PHOTO_POOL)]
-        items.append(
-            Product(
-                title=clean(title, 120),
-                brand=clean(brand, 60),
-                price=0.0,
-                old_price=0.0,
-                image=img,
-                images=json.dumps([img]),
-                sizes=sizes,
-                category=cat,
-                description=clean(f"{desc} Наличие и цену уточняем под запрос в Бишкеке / КР.", 1500),
-                badge="Узнать цену",
-                active=True,
-            )
-        )
-    return items
+async def backfill():
+    """Заполняет поисковый индекс у старых товаров и убирает старый бейдж «Узнать цену»."""
+    async with Session() as s:
+        await s.execute(update(Product).where(Product.badge == "Узнать цену").values(badge=""))
+        await s.commit()
+        cats = {c["slug"]: c["name"] for c in await get_cats(s)}
+        while True:
+            rows = (
+                await s.execute(select(Product).where(or_(Product.search.is_(None), Product.search == "")).limit(300))
+            ).scalars().all()
+            if not rows:
+                break
+            for p in rows:
+                p.search = make_search(p.title, p.brand, p.color, p.tags, cats.get(p.category, ""), p.sku, p.sizes)
+            await s.commit()
 
 
 @asynccontextmanager
 async def lifespan(app):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    for col, ddl in (("images", "TEXT DEFAULT '[]'"), ("badge", "VARCHAR DEFAULT ''")):
-        try:
-            async with engine.begin() as conn:
-                ine = "IF NOT EXISTS " if "asyncpg" in url else ""
-                await conn.execute(text(f"ALTER TABLE shop_products ADD COLUMN {ine}{col} {ddl}"))
-        except Exception:
-            pass
+    await migrate()
     async with Session() as s:
         if not (await s.execute(select(Category.slug).limit(1))).first():
             s.add_all([Category(slug=a, name=b, pos=c) for a, b, c in SEED_CATS])
-        if not (await s.execute(select(Product.id).limit(1))).first():
-            s.add_all(build_900_catalog(900))
-        await s.commit()
-
+            await s.commit()
+    try:
+        await backfill()
+    except Exception:
+        log.exception("backfill failed")
     if BOT_TOKEN and PUBLIC_URL:
         await tg("setWebhook", url=f"{PUBLIC_URL}/tg/webhook/{HOOK_SECRET}", allowed_updates=["message", "callback_query"])
         await tg("setChatMenuButton", menu_button={"type": "web_app", "text": "STYLE HUB", "web_app": {"url": PUBLIC_URL}})
@@ -476,7 +601,16 @@ async def lifespan(app):
 
 
 app = FastAPI(title="STYLE HUB — Бишкек", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=800)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def no_store_api(request: Request, call_next):
+    resp = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.get("/")
@@ -489,6 +623,12 @@ async def health():
     return {"ok": True}
 
 
+@app.get("/health/db")
+async def health_db(db: AsyncSession = Depends(get_db)):
+    await db.execute(text("SELECT 1"))
+    return {"ok": True, "db": True}
+
+
 @app.get("/img/{iid}")
 async def get_img(iid: int, db: AsyncSession = Depends(get_db)):
     im = await db.get(Image, iid)
@@ -497,71 +637,193 @@ async def get_img(iid: int, db: AsyncSession = Depends(get_db)):
     return Response(im.data, media_type=im.mime, headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
+# ----------------------------------------------------------------------------------------------
+# Публичный каталог: поиск, фильтры, пагинация
+# ----------------------------------------------------------------------------------------------
+PRICE_FIRST = case((Product.price > 0, 0), else_=1)
+ORDERS = {
+    "new": (Product.id.desc(),),
+    "top": (Product.is_top.desc(), Product.top_pos.desc(), Product.id.desc()),
+    "price_asc": (PRICE_FIRST, Product.price.asc(), Product.id.desc()),
+    "price_desc": (Product.price.desc(), Product.id.desc()),
+}
+
+
+def catalog_filters(q="", cat="", brand="", price="all"):
+    w = []
+    if cat and cat != "all":
+        w.append(Product.category == cat)
+    if brand:
+        w.append(Product.brand.like(f"{esc_like(brand)}%", escape="\\"))
+    if price == "priced":
+        w.append(Product.price > 0)
+    elif price == "request":
+        w.append(or_(Product.price <= 0, Product.price.is_(None)))
+    for tok in norm(q).split()[:6]:
+        if re.fullmatch(r"\d{2}", tok) and 35 <= int(tok) <= 50:
+            tok = f"size{tok}"
+        w.append(Product.search.like(f"%{esc_like(tok)}%", escape="\\"))
+    return w
+
+
 @app.get("/api/init")
 async def api_init(request: Request, db: AsyncSession = Depends(get_db)):
     try:
         who = await auth(request)
     except HTTPException:
         who = None
-    rows = (await db.execute(select(Product).where(Product.active == True).order_by(Product.id.desc()))).scalars().all()
     cfg = await get_settings(db)
     cfg["app_link"] = APP_LINK
+    cfg.pop("qr", None)
+
+    agg = {}
+    for b, c in (await db.execute(select(Product.brand, func.count(Product.id)).where(Product.active == True).group_by(Product.brand))).all():  # noqa: E712
+        n = brand_name(b)
+        if n:
+            agg[n] = agg.get(n, 0) + c
+    brands = [{"name": n, "count": c} for n, c in sorted(agg.items(), key=lambda x: (-x[1], x[0]))][:60]
+
+    top_rows = (
+        await db.execute(select(Product).where(Product.active == True, Product.is_top == True).order_by(*ORDERS["top"]).limit(12))  # noqa: E712
+    ).scalars().all()
+    total = (await db.execute(select(func.count(Product.id)).where(Product.active == True))).scalar() or 0  # noqa: E712
+
+    favs = []
+    if who:
+        favs = [r for r in (await db.execute(select(Favorite.pid).where(Favorite.uid == who["id"]).order_by(Favorite.id.desc()))).scalars()]
     return {
         "cfg": cfg,
         "cats": await get_cats(db),
-        "products": [prod_dict(p) for p in rows],
+        "brands": brands,
+        "top": [prod_dict(p) for p in top_rows],
+        "total": total,
+        "favs": favs,
         "authed": bool(who),
         "is_admin": bool(who and who["id"] in ADMIN_IDS),
     }
 
 
+@app.get("/api/products")
+async def api_products(
+    q: str = "", cat: str = "", brand: str = "", price: str = "all", sort: str = "new",
+    top: int = 0, ids: str = "", offset: int = 0, limit: int = 24,
+    db: AsyncSession = Depends(get_db),
+):
+    limit, offset = max(1, min(limit, 100)), max(0, offset)
+    where = [Product.active == True] + catalog_filters(q, cat, brand, price)  # noqa: E712
+    if top:
+        where.append(Product.is_top == True)  # noqa: E712
+    if ids:
+        id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()][:100]
+        if not id_list:
+            return {"items": [], "total": 0}
+        where.append(Product.id.in_(id_list))
+    total = (await db.execute(select(func.count(Product.id)).where(*where))).scalar() or 0
+    order = ORDERS.get(sort, ORDERS["new"])
+    rows = (await db.execute(select(Product).where(*where).order_by(*order).offset(offset).limit(limit))).scalars().all()
+    return {"items": [prod_dict(p) for p in rows], "total": total}
+
+
+# ----------------------------------------------------------------------------------------------
+# Избранное
+# ----------------------------------------------------------------------------------------------
+async def fav_ids(db, uid):
+    return [r for r in (await db.execute(select(Favorite.pid).where(Favorite.uid == uid).order_by(Favorite.id.desc()))).scalars()]
+
+
+@app.get("/api/favorites")
+async def get_favorites(db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    return {"ids": await fav_ids(db, who["id"])}
+
+
+@app.post("/api/favorites/sync")
+async def sync_favorites(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    """Объединяет локальное избранное с серверным и возвращает итоговый список."""
+    incoming = [int(x) for x in (d.get("ids") or []) if str(x).isdigit()][:300]
+    have = set(await fav_ids(db, who["id"]))
+    new = [i for i in incoming if i not in have]
+    if new:
+        exist = set((await db.execute(select(Product.id).where(Product.id.in_(new)))).scalars())
+        for pid in new:
+            if pid in exist:
+                db.add(Favorite(uid=who["id"], pid=pid))
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+    return {"ids": await fav_ids(db, who["id"])}
+
+
+@app.post("/api/favorites/{pid}")
+async def set_favorite(pid: int, d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
+    on = bool(d.get("on", True))
+    row = (await db.execute(select(Favorite).where(Favorite.uid == who["id"], Favorite.pid == pid))).scalars().first()
+    if on and not row and await db.get(Product, pid):
+        db.add(Favorite(uid=who["id"], pid=pid))
+    elif not on and row:
+        await db.delete(row)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+    return {"on": on}
+
+
+# ----------------------------------------------------------------------------------------------
+# Заявки
+# ----------------------------------------------------------------------------------------------
 @app.post("/api/orders")
 async def create_order(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
     phone, address, comment = clean(d.get("phone"), 32), clean(d.get("address"), 200), clean(d.get("comment"), 500)
+    req_id = clean(d.get("req_id"), 64)
     if len(re.sub(r"\D", "", phone)) < 9:
         raise HTTPException(400, "Укажите корректный номер телефона")
     if len(address) < 2:
         raise HTTPException(400, "Укажите город или район")
-    items = d.get("items")
-    if not isinstance(items, list) or not items or len(items) > 20:
-        raise HTTPException(400, "Выберите хотя бы одну модель")
+
+    if req_id:  # защита от двойной отправки
+        dup = (await db.execute(select(Order).where(Order.uid == who["id"], Order.req_id == req_id))).scalars().first()
+        if dup:
+            return {"id": dup.id, "total": float(dup.total or 0), "on_request": float(dup.total or 0) <= 0, "duplicate": True}
+
+    recent = (
+        await db.execute(select(func.count(Order.id)).where(Order.uid == who["id"], Order.created > time.time() - 60))
+    ).scalar() or 0
+    if recent >= 5:
+        raise HTTPException(429, "Слишком много запросов подряд. Подождите минуту.")
+
+    items = d.get("items") or []
+    if not isinstance(items, list) or len(items) > 20:
+        raise HTTPException(400, "Слишком много позиций в заявке")
+    if not items and len(comment) < 5:
+        raise HTTPException(400, "Выберите модель или опишите, какую пару нужно найти")
+
+    lines, total = [], 0.0
     try:
         ids = {int(i["id"]) for i in items}
-        prods = {
-            p.id: p
-            for p in (await db.execute(select(Product).where(Product.id.in_(ids), Product.active == True))).scalars()
-        }
-        lines, total = [], 0.0
+        prods = {}
+        if ids:
+            prods = {
+                p.id: p
+                for p in (await db.execute(select(Product).where(Product.id.in_(ids), Product.active == True))).scalars()  # noqa: E712
+            }
         for i in items:
-            p, size, qty = prods.get(int(i["id"])), str(i.get("size") or "42"), int(i.get("qty") or 1)
-            allowed_sizes = [x for x in (p.sizes or "").split(",") if x] if p else []
-            if not p or (allowed_sizes and size not in allowed_sizes) or not 1 <= qty <= 10:
+            p, size, qty = prods.get(int(i["id"])), str(i.get("size") or ""), int(i.get("qty") or 1)
+            allowed = [x for x in (p.sizes or "").split(",") if x] if p else []
+            if not p or not size or (allowed and size not in allowed) or not 1 <= qty <= 10:
                 raise ValueError
-            p_price = float(p.price or 0)
-            lines.append(
-                {
-                    "id": p.id,
-                    "title": p.title,
-                    "size": size,
-                    "qty": qty,
-                    "price": p_price,
-                    "on_request": p_price <= 0,
-                    "image": prod_dict(p)["image"],
-                }
-            )
-            total += p_price * qty
+            price = float(p.price or 0)
+            lines.append({
+                "id": p.id, "title": p.title, "size": size, "qty": qty, "price": price,
+                "on_request": price <= 0, "image": prod_dict(p)["image"],
+            })
+            total += price * qty
     except Exception:
-        raise HTTPException(400, "Одна из моделей недоступна. Обновите страницу и повторите")
+        raise HTTPException(400, "Одна из моделей или размеров недоступна. Обновите страницу и повторите")
 
     o = Order(
-        uid=who["id"],
-        username=who["name"],
-        items=json.dumps(lines, ensure_ascii=False),
-        total=total,
-        phone=phone,
-        address=address,
-        comment=comment,
-        status="new",
+        uid=who["id"], username=who["name"], items=json.dumps(lines, ensure_ascii=False), total=total,
+        phone=phone, address=address, comment=comment, status="new", req_id=req_id,
     )
     db.add(o)
     await db.commit()
@@ -571,52 +833,60 @@ async def create_order(d: dict, db: AsyncSession = Depends(get_db), who=Depends(
 
 @app.get("/api/my_orders")
 async def my_orders(db: AsyncSession = Depends(get_db), who=Depends(auth)):
-    rows = (
-        await db.execute(select(Order).where(Order.uid == who["id"]).order_by(Order.id.desc()).limit(30))
-    ).scalars()
+    rows = (await db.execute(select(Order).where(Order.uid == who["id"]).order_by(Order.id.desc()).limit(30))).scalars()
     return [order_dict(o) for o in rows]
 
 
-@app.get("/api/admin/orders")
-async def admin_orders(db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    rows = (await db.execute(select(Order).order_by(Order.id.desc()).limit(150))).scalars()
-    return [order_dict(o) for o in rows]
-
-
-@app.post("/api/admin/orders/{oid}/status")
-async def admin_status(oid: int, d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    o = await apply_status(db, oid, d.get("status"))
-    if not o:
-        raise HTTPException(404, "Заявка не найдена")
-    return order_dict(o)
+# ----------------------------------------------------------------------------------------------
+# Админка
+# ----------------------------------------------------------------------------------------------
+@app.get("/api/admin/stats")
+async def admin_stats(db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    cnt = lambda *w: select(func.count(Product.id)).where(*w)
+    total = (await db.execute(cnt())).scalar() or 0
+    hidden = (await db.execute(cnt(Product.active == False))).scalar() or 0  # noqa: E712
+    priced = (await db.execute(cnt(Product.price > 0))).scalar() or 0
+    top = (await db.execute(cnt(Product.is_top == True))).scalar() or 0  # noqa: E712
+    legacy = (await db.execute(cnt(or_(Product.sku.is_(None), Product.sku == "")))).scalar() or 0
+    new_orders = (await db.execute(select(func.count(Order.id)).where(Order.status == "new"))).scalar() or 0
+    return {"total": total, "hidden": hidden, "priced": priced, "top": top, "legacy": legacy, "new_orders": new_orders}
 
 
 @app.get("/api/admin/products")
-async def admin_products(db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    rows = (await db.execute(select(Product).order_by(Product.id.desc()).limit(300))).scalars()
-    return [prod_dict(p) for p in rows]
+async def admin_products(
+    q: str = "", state: str = "all", offset: int = 0, limit: int = 30,
+    db: AsyncSession = Depends(get_db), _=Depends(admin),
+):
+    limit, offset = max(1, min(limit, 100)), max(0, offset)
+    where = catalog_filters(q)
+    if state == "active":
+        where.append(Product.active == True)  # noqa: E712
+    elif state == "hidden":
+        where.append(Product.active == False)  # noqa: E712
+    elif state == "top":
+        where.append(Product.is_top == True)  # noqa: E712
+    elif state == "request":
+        where.append(or_(Product.price <= 0, Product.price.is_(None)))
+    total = (await db.execute(select(func.count(Product.id)).where(*where))).scalar() or 0
+    rows = (await db.execute(select(Product).where(*where).order_by(Product.id.desc()).offset(offset).limit(limit))).scalars().all()
+    return {"items": [prod_dict(p) for p in rows], "total": total}
 
 
 @app.post("/api/admin/products")
 async def admin_save_product(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    raw_price = d.get("price")
-    raw_old = d.get("old_price")
     try:
-        price = 0.0 if raw_price in (None, "", "null") else float(raw_price)
-        old = 0.0 if raw_old in (None, "", "null") else float(raw_old)
-    except Exception:
+        price, old = to_num(d.get("price")), to_num(d.get("old_price"))
+    except ValueError:
         raise HTTPException(400, "Цена должна быть числом или пустой")
     if price < 0 or old < 0:
         raise HTTPException(400, "Цена не может быть отрицательной")
-
     title = clean(d.get("title"), 120)
-    sizes = ",".join(x.strip() for x in str(d.get("sizes", "39,40,41,42,43,44")).split(",") if x.strip())
-    imgs = d.get("images") if isinstance(d.get("images"), list) else []
-    imgs = [i for i in imgs if valid_img(i)][:12]
-    if not title or not sizes:
-        raise HTTPException(400, "Заполните название и размеры")
-    if not imgs:
-        raise HTTPException(400, "Добавьте хотя бы одно фото")
+    sizes = parse_sizes(d.get("sizes") or "39,40,41,42,43,44")
+    imgs = parse_images(d.get("images"))
+    if not title:
+        raise HTTPException(400, "Введите название модели")
+    if not sizes:
+        raise HTTPException(400, "Укажите хотя бы один размер")
 
     if d.get("id"):
         p = await db.get(Product, int(d["id"]))
@@ -626,62 +896,190 @@ async def admin_save_product(d: dict, db: AsyncSession = Depends(get_db), _=Depe
         p = Product()
         db.add(p)
 
-    p.title = title
-    p.brand = clean(d.get("brand"), 60)
-    p.price = price
-    p.old_price = old
-    p.sizes = sizes
-    p.image = imgs[0]
-    p.images = json.dumps(imgs)
-    badge_clean = clean(d.get("badge"), 20)
-    p.badge = badge_clean if badge_clean else ("Узнать цену" if price <= 0 else "")
+    p.title, p.brand = title, clean(d.get("brand"), 60)
+    p.color, p.tags = clean(d.get("color"), 60), clean(d.get("tags"), 200)
+    p.price, p.old_price, p.sizes = price, old, sizes
+    p.image, p.images = (imgs[0] if imgs else ""), json.dumps(imgs)
+    p.badge = clean(d.get("badge"), 20)
     p.category = clean(d.get("category"), 40)
     p.description = clean(d.get("description"), 1500)
-    p.active = bool(d.get("active", True))
+    p.active = to_bool(d.get("active"), True)
+    was_top = bool(p.is_top)
+    p.is_top = to_bool(d.get("is_top"), False)
+    if p.is_top and not was_top:
+        p.top_pos = int(time.time())
+    if d.get("sku"):
+        p.sku = clean(d.get("sku"), 60)
+    await db.flush()
+    if not p.sku:
+        p.sku = f"M{p.id}"
+    cats = {c["slug"]: c["name"] for c in await get_cats(db)}
+    p.search = make_search(p.title, p.brand, p.color, p.tags, cats.get(p.category, ""), p.sku, p.sizes)
     await db.commit()
     return prod_dict(p)
 
 
-@app.post("/api/admin/products/bulk")
-async def admin_bulk_products(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    """Массовое добавление моделей строками: Название | Бренд | Категория | URL_фото | Размеры."""
-    added = 0
-    raw_text = str(d.get("lines") or "")
-    default_img = PHOTO_POOL[0]
-    for idx, line in enumerate(raw_text.splitlines()[:300]):
-        parts = [x.strip() for x in line.split("|")]
-        if not parts or not parts[0]:
-            continue
-        title = clean(parts[0], 120)
-        brand = clean(parts[1] if len(parts) > 1 else "", 60)
-        cat = clean(parts[2] if len(parts) > 2 else "sneakers", 40)
-        img = parts[3] if len(parts) > 3 and valid_img(parts[3]) else PHOTO_POOL[idx % len(PHOTO_POOL)]
-        sizes = clean(parts[4] if len(parts) > 4 and parts[4] else "39,40,41,42,43,44", 120)
-        db.add(
-            Product(
-                title=title,
-                brand=brand,
-                price=0.0,
-                old_price=0.0,
-                image=img or default_img,
-                images=json.dumps([img or default_img]),
-                sizes=sizes,
-                category=cat,
-                description="Подбор под запрос в Бишкеке / КР. Наличие и цену уточняем.",
-                badge="Узнать цену",
-                active=True,
-            )
-        )
-        added += 1
+@app.post("/api/admin/products/{pid}/flags")
+async def admin_flags(pid: int, d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    p = await db.get(Product, pid)
+    if not p:
+        raise HTTPException(404, "Модель не найдена")
+    if "active" in d:
+        p.active = to_bool(d["active"], True)
+    if "is_top" in d:
+        new = to_bool(d["is_top"], False)
+        if new and not p.is_top:
+            p.top_pos = int(time.time())
+        p.is_top = new
     await db.commit()
-    return {"added": added}
+    return prod_dict(p)
 
 
 @app.delete("/api/admin/products/{pid}")
 async def admin_delete_product(pid: int, db: AsyncSession = Depends(get_db), _=Depends(admin)):
     await db.execute(delete(Product).where(Product.id == pid))
+    await db.execute(delete(Favorite).where(Favorite.pid == pid))
     await db.commit()
     return {"ok": True}
+
+
+@app.post("/api/admin/products/purge_legacy")
+async def admin_purge_legacy(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    """Удаляет позиции без артикула — это остатки старого демо-каталога из v7. Нужно явное confirm=true."""
+    if d.get("confirm") is not True:
+        raise HTTPException(400, "Нужно подтверждение")
+    res = await db.execute(delete(Product).where(or_(Product.sku.is_(None), Product.sku == "")))
+    await db.execute(delete(Favorite).where(~Favorite.pid.in_(select(Product.id))))
+    await db.commit()
+    return {"deleted": res.rowcount or 0}
+
+
+IMPORT_BATCH_MAX = 250
+
+
+@app.post("/api/admin/import")
+async def admin_import(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    """
+    Пакетный импорт. Клиент шлёт строки пачками (до 250). Поля строки:
+    sku, title*, brand, category (slug или название), price, old_price, sizes, color,
+    image, images (через | или пробел), description, tags, top, active.
+    mode = "upsert" (по sku, по умолчанию) или "add" (всегда создавать новые).
+    """
+    rows = d.get("rows")
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "Нет строк для импорта")
+    if len(rows) > IMPORT_BATCH_MAX:
+        raise HTTPException(400, f"Не более {IMPORT_BATCH_MAX} строк за один запрос")
+    mode = "add" if d.get("mode") == "add" else "upsert"
+    offset = int(d.get("offset") or 0)
+
+    cats = await get_cats(db)
+    by_slug = {c["slug"].lower(): c["slug"] for c in cats}
+    by_name = {norm(c["name"]): c["slug"] for c in cats}
+    names = {c["slug"]: c["name"] for c in cats}
+
+    def resolve_cat(raw):
+        raw = clean(raw, 40)
+        if not raw:
+            return ""
+        key = raw.lower()
+        if key in by_slug:
+            return by_slug[key]
+        if norm(raw) in by_name:
+            return by_name[norm(raw)]
+        slug = f"c{int(time.time() * 1000)}{len(by_slug)}"
+        db.add(Category(slug=slug, name=raw[:30], pos=len(by_slug) + 10))
+        by_slug[slug.lower()], by_name[norm(raw)], names[slug] = slug, slug, raw[:30]
+        return slug
+
+    errors, prepared = [], []
+    for n, r in enumerate(rows):
+        line = offset + n + 1
+        if not isinstance(r, dict):
+            errors.append({"row": line, "error": "строка не распознана"})
+            continue
+        title = clean(r.get("title"), 120)
+        if not title:
+            errors.append({"row": line, "error": "нет названия"})
+            continue
+        try:
+            price, old = to_num(r.get("price")), to_num(r.get("old_price"))
+            if price < 0 or old < 0:
+                raise ValueError
+        except ValueError:
+            errors.append({"row": line, "error": f"некорректная цена у «{title}»"})
+            continue
+        raw_imgs = r.get("images") or r.get("image") or ""
+        imgs = parse_images(raw_imgs)
+        if str(raw_imgs).strip() and not imgs:
+            errors.append({"row": line, "error": f"фото у «{title}» должно быть ссылкой https://"})
+            continue
+        brand, color = clean(r.get("brand"), 60), clean(r.get("color"), 60)
+        sku = clean(r.get("sku"), 60)
+        if not sku:  # стабильный автоартикул: повторный импорт обновит, а не продублирует
+            sku = "I-" + hashlib.sha1(f"{norm(title)}|{norm(brand)}|{norm(color)}".encode()).hexdigest()[:10]
+        prepared.append((line, sku, title, brand, color, price, old, imgs, r))
+
+    existing = {}
+    if mode == "upsert" and prepared:
+        skus = list({x[1] for x in prepared})
+        for p in (await db.execute(select(Product).where(Product.sku.in_(skus)))).scalars():
+            existing[p.sku] = p
+
+    added = updated = 0
+    for line, sku, title, brand, color, price, old, imgs, r in prepared:
+        p = existing.get(sku) if mode == "upsert" else None
+        creating = p is None
+        if creating:
+            p = Product(sku=sku)
+            db.add(p)
+        p.title, p.brand, p.color = title, brand, color
+        p.price, p.old_price = price, old
+        sizes = parse_sizes(r.get("sizes")) or (p.sizes if not creating else "39,40,41,42,43,44")
+        p.sizes = sizes
+        if imgs or creating:
+            p.image, p.images = (imgs[0] if imgs else ""), json.dumps(imgs)
+        cat = resolve_cat(r.get("category"))
+        if cat or creating:
+            p.category = cat
+        p.tags = clean(r.get("tags"), 200)
+        p.description = clean(r.get("description"), 1500)
+        if "active" in r and str(r.get("active")).strip() != "":
+            p.active = to_bool(r.get("active"), True)
+        elif creating:
+            p.active = True
+        if "top" in r and str(r.get("top")).strip() != "":
+            new_top = to_bool(r.get("top"))
+            if new_top and not p.is_top:
+                p.top_pos = int(time.time())
+            p.is_top = new_top
+        elif creating:
+            p.is_top = False
+        if creating:
+            p.badge = ""
+            existing[sku] = p
+            added += 1
+        else:
+            updated += 1
+        p.search = make_search(p.title, p.brand, p.color, p.tags, names.get(p.category, ""), p.sku, p.sizes)
+    await db.commit()
+    return {"added": added, "updated": updated, "skipped": len(errors), "errors": errors[:20]}
+
+
+@app.get("/api/admin/orders")
+async def admin_orders(status: str = "", db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    stmt = select(Order).order_by(Order.id.desc()).limit(150)
+    if status in STATUSES:
+        stmt = select(Order).where(Order.status == status).order_by(Order.id.desc()).limit(150)
+    return [order_dict(o) for o in (await db.execute(stmt)).scalars()]
+
+
+@app.post("/api/admin/orders/{oid}/status")
+async def admin_status(oid: int, d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    o = await apply_status(db, oid, d.get("status"))
+    if not o:
+        raise HTTPException(404, "Заявка не найдена")
+    return order_dict(o)
 
 
 @app.post("/api/admin/categories")
