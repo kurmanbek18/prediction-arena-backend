@@ -47,6 +47,7 @@ CLIENT_MSG = {
 # ───────────── База данных ─────────────
 url = os.getenv("DATABASE_URL", "").strip()
 if not url:
+    log.warning("DATABASE_URL не задан — используется временная локальная SQLite БД (shop.db)")
     url = "sqlite+aiosqlite:///./shop.db"
 else:
     url = url.split("?")[0].replace("postgres://", "postgresql://", 1)
@@ -79,7 +80,7 @@ class Product(Base):
     category = Column(String, default="")
     description = Column(Text, default="")
     active = Column(Boolean, default=True)
-    created = Column(Float, default=time.time)
+    created = Column(Float, default=lambda: time.time())
 
 
 class Category(Base):
@@ -107,7 +108,7 @@ class Order(Base):
     address = Column(String)
     comment = Column(String, default="")
     status = Column(String, default="new")
-    created = Column(Float, default=time.time)
+    created = Column(Float, default=lambda: time.time())
 
 
 class Setting(Base):
@@ -445,7 +446,7 @@ async def admin_save_cat(d: dict, db: AsyncSession = Depends(get_db), _=Depends(
             raise HTTPException(404, "Категория не найдена")
         c.name = name
     else:
-        db.add(Category(slug=f"c{int(time.time() * 1000)}", name=name, pos=int(time.time())))
+        db.add(Category(slug=f"c{int(time.time() * 1000)}", name=name, pos=int(time.time()) % 1_000_000))
     await db.commit()
     return await get_cats(db)
 
