@@ -1,5 +1,5 @@
 """
-STYLE HUB — Backend v8.3 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
+STYLE HUB — Backend v8.4 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
 """
 import base64
 import hashlib
@@ -993,6 +993,23 @@ async def admin_import_products(d: dict, db: AsyncSession = Depends(get_db), _=D
         added += 1
     await db.commit()
     return {"added": added}
+
+
+@app.delete("/api/admin/products")
+async def admin_delete_all_products(cat: str = "", db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    cat_slug = clean(cat, 40)
+    if cat_slug and cat_slug != "all":
+        target_ids = [
+            r for r in (await db.execute(select(Product.id).where(Product.category == cat_slug))).scalars()
+        ]
+        if target_ids:
+            await db.execute(delete(Favorite).where(Favorite.pid.in_(target_ids)))
+        res = await db.execute(delete(Product).where(Product.category == cat_slug))
+    else:
+        await db.execute(delete(Favorite))
+        res = await db.execute(delete(Product))
+    await db.commit()
+    return {"ok": True, "deleted": int(res.rowcount or 0)}
 
 
 @app.delete("/api/admin/products/{pid}")
