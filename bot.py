@@ -1,5 +1,5 @@
 """
-STYLE HUB — Backend v8.4 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
+STYLE HUB — Backend v8.5 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
 """
 import base64
 import hashlib
@@ -296,6 +296,37 @@ def brand_name(b):
 
 def money(v):
     return f"{float(v):,.0f}".replace(",", " ")
+
+
+def resolve_category_slug(raw_cat: str, cats_list: list, fallback_slug: str = "sneakers") -> str:
+    val = norm(raw_cat)
+    slug_map = {norm(c["slug"]): c["slug"] for c in cats_list}
+    name_map = {norm(c["name"]): c["slug"] for c in cats_list}
+    if val in slug_map:
+        return slug_map[val]
+    if val in name_map:
+        return name_map[val]
+    aliases = {
+        "кроссовки": "sneakers",
+        "кросс": "sneakers",
+        "казуал": "sneakers",
+        "дроп": "sneakers",
+        "дропы": "sneakers",
+        "спорт": "sport",
+        "бег": "sport",
+        "зал": "sport",
+        "спорт и зал": "sport",
+        "классика": "classic",
+        "туфли": "classic",
+        "классика и туфли": "classic",
+        "повседневные": "everyday",
+        "повседневка": "everyday",
+        "лайфстайл": "everyday",
+    }
+    if val in aliases and aliases[val] in slug_map:
+        return aliases[val]
+    fb = norm(fallback_slug)
+    return slug_map.get(fb, fallback_slug)
 
 
 async def get_settings(db):
@@ -654,9 +685,10 @@ ORDERS = {
 def catalog_filters(q="", cat="", brand="", price="all"):
     w = []
     if cat and cat != "all":
-        w.append(Product.category == cat)
+        w.append(func.lower(func.trim(Product.category)) == norm(cat))
     if brand:
-        w.append(Product.brand.like(f"{esc_like(brand)}%", escape="\\"))
+        b_clean = norm(brand_name(brand))
+        w.append(func.lower(func.trim(Product.brand)).like(f"{esc_like(b_clean)}%", escape="\\"))
     if price == "priced":
         w.append(Product.price > 0)
     elif price == "request":
@@ -880,7 +912,7 @@ async def admin_products(
     limit, offset = max(1, min(limit, 200)), max(0, offset)
     where = []
     if cat and cat != "all":
-        where.append(Product.category == cat)
+        where.append(func.lower(func.trim(Product.category)) == norm(cat))
     for tok in norm(q).split()[:5]:
         where.append(Product.search.like(f"%{esc_like(tok)}%", escape="\\"))
     total = (await db.execute(select(func.count(Product.id)).where(*where))).scalar() or 0
@@ -916,8 +948,9 @@ async def admin_save_product(d: dict, db: AsyncSession = Depends(get_db), _=Depe
         p = Product()
         db.add(p)
 
-    cats = {c["slug"]: c["name"] for c in await get_cats(db)}
-    cat_slug = clean(d.get("category"), 40)
+    cats_list = await get_cats(db)
+    cats = {c["slug"]: c["name"] for c in cats_list}
+    cat_slug = resolve_category_slug(d.get("category"), cats_list, fallback_slug="")
     p.sku = clean(d.get("sku"), 40)
     p.title = title
     p.brand = clean(d.get("brand"), 60)
@@ -945,9 +978,10 @@ async def admin_import_products(d: dict, db: AsyncSession = Depends(get_db), _=D
     raw_items = d.get("items")
     if not isinstance(raw_items, list) or not raw_items:
         raise HTTPException(400, "Передайте список моделей в поле items")
-    default_cat = clean(d.get("category") or "sneakers", 40)
+    cats_list = await get_cats(db)
+    default_cat = resolve_category_slug(d.get("category") or "sneakers", cats_list, fallback_slug="sneakers")
     default_top = to_bool(d.get("is_top"), False)
-    cats = {c["slug"]: c["name"] for c in await get_cats(db)}
+    cats = {c["slug"]: c["name"] for c in cats_list}
     added = 0
     for item in raw_items[:500]:
         if not isinstance(item, dict):
@@ -960,7 +994,7 @@ async def admin_import_products(d: dict, db: AsyncSession = Depends(get_db), _=D
         except Exception:
             price = 0.0
         sizes = parse_sizes(item.get("sizes") or "39,40,41,42,43,44") or "39,40,41,42,43,44"
-        cat_slug = clean(item.get("category") or default_cat or "sneakers", 40)
+        cat_slug = resolve_category_slug(item.get("category") or default_cat, cats_list, fallback_slug=default_cat)
         fallback_img = CATEGORY_FALLBACK_IMG.get(cat_slug, CATEGORY_FALLBACK_IMG["sneakers"])
         imgs = parse_images(item.get("images") if item.get("images") is not None else item.get("image"))
         img = imgs[0] if imgs else fallback_img
