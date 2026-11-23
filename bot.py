@@ -1,5 +1,5 @@
 """
-STYLE HUB — Backend v8.2 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
+STYLE HUB — Backend v8.3 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
 """
 import base64
 import hashlib
@@ -83,6 +83,13 @@ CLIENT_MSG = {
     "shipped": "🚚 Заказ #{id} отправлен. Ожидайте доставку.",
     "done": "🎉 Заказ #{id} доставлен. Спасибо за покупку в STYLE HUB!",
     "cancel": "❌ Заказ #{id} отменён. Напишите нам, если нужно подобрать другую пару.",
+}
+
+CATEGORY_FALLBACK_IMG = {
+    "sneakers": "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=800",
+    "sport": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800",
+    "classic": "https://images.unsplash.com/photo-1614252235316-8c857d38b5f4?w=800",
+    "everyday": "https://images.unsplash.com/photo-1600185365483-26d7a4cc7519?w=800",
 }
 
 url = os.getenv("DATABASE_URL", "").strip()
@@ -272,6 +279,7 @@ BRAND_ALIASES = {
     "vans": "вансы ванс", "converse": "конверс", "guess": "гесс гэс", "louis vuitton": "луи виттон",
     "loro piana": "лоро пиана", "yeezy": "изи йизи", "balenciaga": "баленсиага", "fila": "фила",
     "under armour": "андер армор", "skechers": "скетчерс", "salomon": "саломон", "timberland": "тимберленд",
+    "li-ning": "ли нинг лининг",
 }
 
 
@@ -564,8 +572,6 @@ async def migrate():
 
 async def backfill():
     async with Session() as s:
-        await s.execute(update(Product).where(Product.badge == "Узнать цену").values(badge=""))
-        await s.commit()
         cats = {c["slug"]: c["name"] for c in await get_cats(s)}
         while True:
             rows = (
@@ -845,9 +851,6 @@ async def my_orders(db: AsyncSession = Depends(get_db), who=Depends(auth)):
     return [order_dict(o) for o in rows]
 
 
-# ----------------------------------------------------------------------------------------------
-# Админка
-# ----------------------------------------------------------------------------------------------
 @app.get("/api/admin/stats")
 async def admin_stats(db: AsyncSession = Depends(get_db), _=Depends(admin)):
     cnt = lambda *w: select(func.count(Product.id)).where(*w)
@@ -942,8 +945,9 @@ async def admin_import_products(d: dict, db: AsyncSession = Depends(get_db), _=D
     raw_items = d.get("items")
     if not isinstance(raw_items, list) or not raw_items:
         raise HTTPException(400, "Передайте список моделей в поле items")
+    default_cat = clean(d.get("category") or "sneakers", 40)
+    default_top = to_bool(d.get("is_top"), False)
     cats = {c["slug"]: c["name"] for c in await get_cats(db)}
-    fallback_img = "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=800"
     added = 0
     for item in raw_items[:500]:
         if not isinstance(item, dict):
@@ -956,14 +960,15 @@ async def admin_import_products(d: dict, db: AsyncSession = Depends(get_db), _=D
         except Exception:
             price = 0.0
         sizes = parse_sizes(item.get("sizes") or "39,40,41,42,43,44") or "39,40,41,42,43,44"
+        cat_slug = clean(item.get("category") or default_cat or "sneakers", 40)
+        fallback_img = CATEGORY_FALLBACK_IMG.get(cat_slug, CATEGORY_FALLBACK_IMG["sneakers"])
         imgs = parse_images(item.get("images") if item.get("images") is not None else item.get("image"))
         img = imgs[0] if imgs else fallback_img
         brand = clean(item.get("brand"), 60)
         color = clean(item.get("color"), 60)
         tags = clean(item.get("tags"), 200)
         sku = clean(item.get("sku"), 40)
-        cat_slug = clean(item.get("category") or "sneakers", 40)
-        is_top = to_bool(item.get("is_top"), False)
+        is_top = to_bool(item.get("is_top"), default_top)
         db.add(
             Product(
                 sku=sku,
