@@ -397,6 +397,17 @@
       cursor: pointer;
     }
 
+    .btn-danger {
+      border: 1px solid #fecdd3;
+      background: #fff1f2;
+      color: #be123c;
+      border-radius: 10px;
+      padding: 9px 12px;
+      font-size: 12.5px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
     .btn-wa {
       width: 100%;
       border: none;
@@ -771,7 +782,6 @@
       } catch (_) {}
     }
 
-    // Скрытие клавиатуры при нажатии вне полей ввода
     document.addEventListener("pointerdown", (e) => {
       const active = document.activeElement;
       if (!active || !["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return;
@@ -1399,6 +1409,13 @@
           <button class="btn-secondary" style="width:100%;" onclick="bulkImportProducts()">Загрузить списком</button>
         </div>
 
+        <div class="info-box" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+          <span style="font-size:12.5px;font-weight:600;">Очистка каталога</span>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn-danger" onclick="deleteAllProducts('all')">Удалить все товары</button>
+          </div>
+        </div>
+
         <div>
           ${state.adminProducts.slice(0, 50).map(item => `
             <div class="cart-item">
@@ -1501,6 +1518,21 @@
         await switchAdminTab("products");
       } catch (e) {
         showToast(e.message || "Ошибка импорта");
+      }
+    }
+
+    async function deleteAllProducts(cat = "all") {
+      const ok = window.confirm("Удалить вообще все товары из каталога? Это действие нельзя отменить.");
+      if (!ok) return;
+      try {
+        const q = cat && cat !== "all" ? `?cat=${encodeURIComponent(cat)}` : "";
+        const res = await api(`/api/admin/products${q}`, { method: "DELETE" });
+        state.editingProduct = null;
+        showToast(`Удалено товаров: ${res.deleted ?? 0}`);
+        await initApp();
+        await switchAdminTab("products");
+      } catch (e) {
+        showToast(e.message || "Ошибка удаления всех товаров");
       }
     }
 
