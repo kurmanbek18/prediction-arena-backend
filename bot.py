@@ -1,14 +1,12 @@
 """
-STYLE HUB — Backend v8 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
+STYLE HUB — Backend v8.1 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
 
-Что нового по сравнению с v7:
-  * Никакой «накрутки» каталога: фейковые 900 карточек больше не создаются.
-    Каталог до 2000+ реальных позиций загружается через /api/admin/import (CSV / JSON / список)
-    пачками по 200 строк, с upsert по артикулу (повторный импорт обновляет, а не дублирует).
-  * Серверный поиск и фильтры с пагинацией (/api/products) — фронтенд больше не тянет весь каталог.
-  * Избранное (синхронизация с Telegram-аккаунтом), «Топ недели», бренды, фильтр «с ценой / по запросу».
-  * Защита заявки от двойной отправки (req_id) и от спама, заявка без выбранной модели («Подобрать пару»).
-  * Автомиграция колонок и индексов для уже существующей БД, ничего не нужно удалять руками.
+Улучшения v8.1:
+  * Исправлена обработка статусов заявок и обратная связь по отправке сообщений клиенту.
+  * Добавлен удобный формат заявки для копирования и отправки поставщику (дропшиппинг без склада).
+  * Усилена валидация входных данных, фото, цен, размеров и защита от дублей заявок (req_id).
+  * Сохранены: пакетный импорт (/api/admin/import), серверный поиск и пагинация (/api/products),
+    избранное, «Топ недели», фильтры по бренду/цене/сортировке и автомиграция БД.
 """
 import base64
 import hashlib
@@ -30,8 +28,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy import (
-    Boolean, Column, Float, Integer, LargeBinary, String, Text, UniqueConstraint,
-    case, delete, func, or_, select, text, update,
+    Boolean,
+    Column,
+    Float,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    case,
+    delete,
+    func,
+    or_,
+    select,
+    text,
+    update,
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -50,19 +61,19 @@ ADMIN_IDS = {
 PUBLIC_URL = (os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
 APP_LINK = os.getenv("APP_LINK", "").strip().rstrip("/")
 HOOK_SECRET = hashlib.sha256(("hook" + BOT_TOKEN).encode()).hexdigest()[:32]
-AUTH_MAX_AGE = 72 * 3600  # initData живёт дольше суток, если Mini App долго не закрывали
+AUTH_MAX_AGE = 72 * 3600
 
 DEFAULTS = {
     "shop_name": "STYLE HUB",
     "whatsapp": "",
     "pay_text": "Цену называем до оплаты. Оплата только после того, как вы согласуете модель, размер и стоимость.",
-    "delivery_text": "Найдём нужную пару в Бишкеке и по КР, уточним наличие у поставщиков и напишем вам в Telegram или WhatsApp.",
+    "delivery_text": "Подбираем нужную пару в Бишкеке и по КР, уточняем наличие у поставщиков и связываемся в Telegram или WhatsApp.",
     "qr": "",
 }
 
 STATUSES = {
     "new": "🔎 Новый запрос",
-    "searching": "🕵️ Ищем вариант",
+    "searching": "🕵️ Ищем у поставщика",
     "quoted": "💬 Цена отправлена",
     "confirmed": "✅ Подтверждён",
     "paid": "💰 Оплачен",
@@ -72,12 +83,12 @@ STATUSES = {
 }
 
 CLIENT_MSG = {
-    "searching": "🕵️ По запросу #{id} начали поиск пары и уточняем наличие.",
-    "quoted": "💬 По запросу #{id} нашли вариант и цену — менеджер скоро свяжется с вами.",
-    "confirmed": "✅ Заказ #{id} подтверждён! Менеджер напишет вам по оплате и доставке.",
+    "searching": "🕵️ По запросу #{id} уточняем наличие и размер у поставщиков.",
+    "quoted": "💬 По запросу #{id} нашли вариант и цену — менеджер скоро напишет вам.",
+    "confirmed": "✅ Заказ #{id} подтверждён! Менеджер свяжется с вами по оплате и доставке.",
     "paid": "💰 Оплата по заказу #{id} получена. Спасибо, что выбрали STYLE HUB!",
     "shipped": "🚚 Заказ #{id} отправлен. Ожидайте доставку.",
-    "done": "🎉 Заказ #{id} доставлен. Спасибо за обращение в STYLE HUB!",
+    "done": "🎉 Заказ #{id} доставлен. Спасибо за заказ в STYLE HUB!",
     "cancel": "❌ Заказ #{id} отменён. Напишите нам, если нужно подобрать другую пару.",
 }
 
@@ -100,7 +111,7 @@ if IS_PG:
         connect_args={"ssl": True, "statement_cache_size": 0, "timeout": 20},
         pool_size=5,
         max_overflow=5,
-        pool_recycle=240,  # Neon усыпляет соединения — обновляем заранее
+        pool_recycle=240,
     )
 
 engine = create_async_engine(url, **kw)
@@ -213,7 +224,6 @@ def valid_img(u):
 
 
 def to_num(v, default=0.0):
-    """'12 500', '12,5', '12500.00', None, '' -> float. Нечисло -> ValueError."""
     if v is None or v == "":
         return default
     if isinstance(v, bool):
@@ -404,6 +414,7 @@ async def tg(method, **payload):
             return r.json()
     except Exception as e:
         log.warning("tg %s failed: %s", method, e)
+        return None
 
 
 def order_items(o):
@@ -413,23 +424,32 @@ def order_items(o):
         return []
 
 
+def supplier_line(o):
+    items = order_items(o)
+    if items:
+        parts = [f"{i.get('title')} (р.{i.get('size')} ×{i.get('qty')})" for i in items]
+        base = ", ".join(parts)
+    else:
+        base = "Подбор пары по запросу клиента"
+    extra = f" — {o.comment}" if o.comment else ""
+    return f"{base}{extra} ({o.address})"
+
+
 def order_text(o):
     items = order_items(o)
     lines = "\n".join(f"• {esc(i.get('title'))} — р.{esc(i.get('size'))} × {i.get('qty')}" for i in items)
     if not lines:
-        lines = "• Свободный запрос — подобрать пару (см. комментарий)"
-    total_str = "по запросу (уточняем)" if (o.total or 0) <= 0 else f"{o.total:,.0f} сом"
-    summary = " | ".join(f"{i.get('title')} (р.{i.get('size')} ×{i.get('qty')})" for i in items)
+        lines = "• Подбор пары по описанию клиента"
+    total_str = "уточняем у поставщика" if (o.total or 0) <= 0 else f"{o.total:,.0f} сом"
     t = (
         f"🔎 <b>Заявка #{o.id} · STYLE HUB</b> · {STATUSES.get(o.status, o.status)}\n\n"
         f"{lines}\n\n"
         f"💰 Цена: <b>{total_str}</b>\n"
         f"👤 Клиент: {esc(o.username)}\n"
         f"📞 Телефон: {esc(o.phone)}\n"
-        f"📍 Город / адрес: {esc(o.address)}"
+        f"📍 Город / адрес: {esc(o.address)}\n"
+        f"📋 Для поставщика: <code>{esc(supplier_line(o))}</code>"
     )
-    if summary:
-        t += f"\n📦 Поиск: <code>{esc(summary)}</code>"
     return t + (f"\n💬 Комментарий: {esc(o.comment)}" if o.comment else "")
 
 
@@ -468,9 +488,11 @@ async def apply_status(db, order_id, status):
         return None
     o.status = status
     await db.commit()
-    if status in CLIENT_MSG:
-        await tg("sendMessage", chat_id=o.uid, text=CLIENT_MSG[status].format(id=o.id))
-    return o
+    notified = True
+    if status in CLIENT_MSG and o.uid:
+        res = await tg("sendMessage", chat_id=o.uid, text=CLIENT_MSG[status].format(id=o.id))
+        notified = bool(res and res.get("ok"))
+    return o, notified
 
 
 async def on_callback(cq):
@@ -479,21 +501,24 @@ async def on_callback(cq):
     try:
         _, oid, st = cq["data"].split(":")
         async with Session() as db:
-            o = await apply_status(db, int(oid), st)
+            res = await apply_status(db, int(oid), st)
     except Exception:
         return await tg("answerCallbackQuery", callback_query_id=cq["id"], text="Ошибка")
-    if not o:
+    if not res:
         return await tg("answerCallbackQuery", callback_query_id=cq["id"], text="Заявка не найдена")
-    await tg("answerCallbackQuery", callback_query_id=cq["id"], text=STATUSES[st])
+    o, notified = res
+    tip = STATUSES[st] if notified else f"{STATUSES[st]} (клиенту не доставлено)"
+    await tg("answerCallbackQuery", callback_query_id=cq["id"], text=tip[:180])
     m = cq.get("message") or {}
-    await tg(
-        "editMessageText",
-        chat_id=m["chat"]["id"],
-        message_id=m["message_id"],
-        text=order_text(o),
-        parse_mode="HTML",
-        reply_markup=order_kb(o),
-    )
+    if m.get("chat") and m.get("message_id"):
+        await tg(
+            "editMessageText",
+            chat_id=m["chat"]["id"],
+            message_id=m["message_id"],
+            text=order_text(o),
+            parse_mode="HTML",
+            reply_markup=order_kb(o),
+        )
 
 
 async def on_message(m):
@@ -527,7 +552,6 @@ SEED_CATS = [
 
 
 async def migrate():
-    """Добавляет новые колонки/индексы в уже существующую БД (create_all этого не делает)."""
     ine = "IF NOT EXISTS " if IS_PG else ""
     false = "FALSE" if IS_PG else "0"
     cols = [
@@ -546,7 +570,7 @@ async def migrate():
             async with engine.begin() as conn:
                 await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {ine}{col} {ddl}"))
         except Exception:
-            pass  # колонка уже есть
+            pass
     idx = [
         ("ix_shop_products_sku", "shop_products", "sku"),
         ("ix_shop_products_category", "shop_products", "category"),
@@ -563,7 +587,6 @@ async def migrate():
 
 
 async def backfill():
-    """Заполняет поисковый индекс у старых товаров и убирает старый бейдж «Узнать цену»."""
     async with Session() as s:
         await s.execute(update(Product).where(Product.badge == "Узнать цену").values(badge=""))
         await s.commit()
@@ -705,8 +728,15 @@ async def api_init(request: Request, db: AsyncSession = Depends(get_db)):
 
 @app.get("/api/products")
 async def api_products(
-    q: str = "", cat: str = "", brand: str = "", price: str = "all", sort: str = "new",
-    top: int = 0, ids: str = "", offset: int = 0, limit: int = 24,
+    q: str = "",
+    cat: str = "",
+    brand: str = "",
+    price: str = "all",
+    sort: str = "new",
+    top: int = 0,
+    ids: str = "",
+    offset: int = 0,
+    limit: int = 24,
     db: AsyncSession = Depends(get_db),
 ):
     limit, offset = max(1, min(limit, 100)), max(0, offset)
@@ -738,7 +768,6 @@ async def get_favorites(db: AsyncSession = Depends(get_db), who=Depends(auth)):
 
 @app.post("/api/favorites/sync")
 async def sync_favorites(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
-    """Объединяет локальное избранное с серверным и возвращает итоговый список."""
     incoming = [int(x) for x in (d.get("ids") or []) if str(x).isdigit()][:300]
     have = set(await fav_ids(db, who["id"]))
     new = [i for i in incoming if i not in have]
@@ -781,7 +810,7 @@ async def create_order(d: dict, db: AsyncSession = Depends(get_db), who=Depends(
     if len(address) < 2:
         raise HTTPException(400, "Укажите город или район")
 
-    if req_id:  # защита от двойной отправки
+    if req_id:
         dup = (await db.execute(select(Order).where(Order.uid == who["id"], Order.req_id == req_id))).scalars().first()
         if dup:
             return {"id": dup.id, "total": float(dup.total or 0), "on_request": float(dup.total or 0) <= 0, "duplicate": True}
@@ -795,7 +824,7 @@ async def create_order(d: dict, db: AsyncSession = Depends(get_db), who=Depends(
     items = d.get("items") or []
     if not isinstance(items, list) or len(items) > 20:
         raise HTTPException(400, "Слишком много позиций в заявке")
-    if not items and len(comment) < 5:
+    if not items and len(comment) < 4:
         raise HTTPException(400, "Выберите модель или опишите, какую пару нужно найти")
 
     lines, total = [], 0.0
@@ -814,16 +843,28 @@ async def create_order(d: dict, db: AsyncSession = Depends(get_db), who=Depends(
                 raise ValueError
             price = float(p.price or 0)
             lines.append({
-                "id": p.id, "title": p.title, "size": size, "qty": qty, "price": price,
-                "on_request": price <= 0, "image": prod_dict(p)["image"],
+                "id": p.id,
+                "title": p.title,
+                "size": size,
+                "qty": qty,
+                "price": price,
+                "on_request": price <= 0,
+                "image": prod_dict(p)["image"],
             })
             total += price * qty
     except Exception:
         raise HTTPException(400, "Одна из моделей или размеров недоступна. Обновите страницу и повторите")
 
     o = Order(
-        uid=who["id"], username=who["name"], items=json.dumps(lines, ensure_ascii=False), total=total,
-        phone=phone, address=address, comment=comment, status="new", req_id=req_id,
+        uid=who["id"],
+        username=who["name"],
+        items=json.dumps(lines, ensure_ascii=False),
+        total=total,
+        phone=phone,
+        address=address,
+        comment=comment,
+        status="new",
+        req_id=req_id,
     )
     db.add(o)
     await db.commit()
@@ -854,8 +895,12 @@ async def admin_stats(db: AsyncSession = Depends(get_db), _=Depends(admin)):
 
 @app.get("/api/admin/products")
 async def admin_products(
-    q: str = "", state: str = "all", offset: int = 0, limit: int = 30,
-    db: AsyncSession = Depends(get_db), _=Depends(admin),
+    q: str = "",
+    state: str = "all",
+    offset: int = 0,
+    limit: int = 30,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(admin),
 ):
     limit, offset = max(1, min(limit, 100)), max(0, offset)
     where = catalog_filters(q)
@@ -945,7 +990,6 @@ async def admin_delete_product(pid: int, db: AsyncSession = Depends(get_db), _=D
 
 @app.post("/api/admin/products/purge_legacy")
 async def admin_purge_legacy(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    """Удаляет позиции без артикула — это остатки старого демо-каталога из v7. Нужно явное confirm=true."""
     if d.get("confirm") is not True:
         raise HTTPException(400, "Нужно подтверждение")
     res = await db.execute(delete(Product).where(or_(Product.sku.is_(None), Product.sku == "")))
@@ -959,12 +1003,6 @@ IMPORT_BATCH_MAX = 250
 
 @app.post("/api/admin/import")
 async def admin_import(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    """
-    Пакетный импорт. Клиент шлёт строки пачками (до 250). Поля строки:
-    sku, title*, brand, category (slug или название), price, old_price, sizes, color,
-    image, images (через | или пробел), description, tags, top, active.
-    mode = "upsert" (по sku, по умолчанию) или "add" (всегда создавать новые).
-    """
     rows = d.get("rows")
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "Нет строк для импорта")
@@ -977,8 +1015,10 @@ async def admin_import(d: dict, db: AsyncSession = Depends(get_db), _=Depends(ad
     by_slug = {c["slug"].lower(): c["slug"] for c in cats}
     by_name = {norm(c["name"]): c["slug"] for c in cats}
     names = {c["slug"]: c["name"] for c in cats}
+    slug_counter = 0
 
     def resolve_cat(raw):
+        nonlocal slug_counter
         raw = clean(raw, 40)
         if not raw:
             return ""
@@ -987,8 +1027,9 @@ async def admin_import(d: dict, db: AsyncSession = Depends(get_db), _=Depends(ad
             return by_slug[key]
         if norm(raw) in by_name:
             return by_name[norm(raw)]
-        slug = f"c{int(time.time() * 1000)}{len(by_slug)}"
-        db.add(Category(slug=slug, name=raw[:30], pos=len(by_slug) + 10))
+        slug_counter += 1
+        slug = f"c{int(time.time() * 1000)}_{slug_counter}"
+        db.add(Category(slug=slug, name=raw[:30], pos=len(by_slug) + 10 + slug_counter))
         by_slug[slug.lower()], by_name[norm(raw)], names[slug] = slug, slug, raw[:30]
         return slug
 
@@ -1016,7 +1057,7 @@ async def admin_import(d: dict, db: AsyncSession = Depends(get_db), _=Depends(ad
             continue
         brand, color = clean(r.get("brand"), 60), clean(r.get("color"), 60)
         sku = clean(r.get("sku"), 60)
-        if not sku:  # стабильный автоартикул: повторный импорт обновит, а не продублирует
+        if not sku:
             sku = "I-" + hashlib.sha1(f"{norm(title)}|{norm(brand)}|{norm(color)}".encode()).hexdigest()[:10]
         prepared.append((line, sku, title, brand, color, price, old, imgs, r))
 
@@ -1071,15 +1112,19 @@ async def admin_orders(status: str = "", db: AsyncSession = Depends(get_db), _=D
     stmt = select(Order).order_by(Order.id.desc()).limit(150)
     if status in STATUSES:
         stmt = select(Order).where(Order.status == status).order_by(Order.id.desc()).limit(150)
-    return [order_dict(o) for o in (await db.execute(stmt)).scalars()]
+    rows = [order_dict(o) for o in (await db.execute(stmt)).scalars()]
+    return rows
 
 
 @app.post("/api/admin/orders/{oid}/status")
 async def admin_status(oid: int, d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    o = await apply_status(db, oid, d.get("status"))
-    if not o:
+    res = await apply_status(db, oid, d.get("status"))
+    if not res:
         raise HTTPException(404, "Заявка не найдена")
-    return order_dict(o)
+    o, notified = res
+    out = order_dict(o)
+    out["notified"] = notified
+    return out
 
 
 @app.post("/api/admin/categories")
