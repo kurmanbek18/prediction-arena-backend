@@ -760,7 +760,8 @@
       adminTab: "products",
       editingProduct: null,
       searchTimer: null,
-      loadingPage: false
+      loadingPage: false,
+      fetchSeq: 0
     };
 
     function makeReqId() {
@@ -1004,8 +1005,10 @@
     }
 
     async function fetchProducts(reset = false) {
-      if (state.loadingPage) return;
+      const seq = ++state.fetchSeq;
+      if (!reset && state.loadingPage) return;
       state.loadingPage = true;
+
       if (reset) {
         state.products = [];
         state.total = 0;
@@ -1020,10 +1023,12 @@
       if (state.favOnly) {
         const ids = [...state.favIds];
         if (!ids.length) {
-          state.products = [];
-          state.total = 0;
-          renderCatalog();
-          state.loadingPage = false;
+          if (seq === state.fetchSeq) {
+            state.products = [];
+            state.total = 0;
+            renderCatalog();
+            state.loadingPage = false;
+          }
           return;
         }
         const params = new URLSearchParams({
@@ -1033,18 +1038,19 @@
           brand,
           price,
           sort,
-          offset: String(state.products.length),
+          offset: String(reset ? 0 : state.products.length),
           limit: String(PAGE_SIZE)
         });
         try {
           const data = await api("/api/products?" + params.toString());
-          state.products = state.products.concat(data.items || []);
+          if (seq !== state.fetchSeq) return;
+          state.products = reset ? (data.items || []) : state.products.concat(data.items || []);
           state.total = data.total || 0;
           renderCatalog();
         } catch (e) {
-          showToast(e.message || "Ошибка загрузки избранного");
+          if (seq === state.fetchSeq) showToast(e.message || "Ошибка загрузки избранного");
         } finally {
-          state.loadingPage = false;
+          if (seq === state.fetchSeq) state.loadingPage = false;
         }
         return;
       }
@@ -1055,20 +1061,23 @@
         brand,
         price,
         sort,
-        offset: String(state.products.length),
+        offset: String(reset ? 0 : state.products.length),
         limit: String(PAGE_SIZE)
       });
 
       try {
         const data = await api("/api/products?" + params.toString());
-        state.products = state.products.concat(data.items || []);
+        if (seq !== state.fetchSeq) return;
+        state.products = reset ? (data.items || []) : state.products.concat(data.items || []);
         state.total = data.total || 0;
         renderCatalog();
       } catch (e) {
-        document.getElementById("catalogMeta").textContent = "Ошибка";
-        showToast(e.message || "Ошибка загрузки каталога");
+        if (seq === state.fetchSeq) {
+          document.getElementById("catalogMeta").textContent = "Ошибка";
+          showToast(e.message || "Ошибка загрузки каталога");
+        }
       } finally {
-        state.loadingPage = false;
+        if (seq === state.fetchSeq) state.loadingPage = false;
       }
     }
 
@@ -1339,7 +1348,7 @@
           <b>${p.id ? `Редактирование #${p.id}` : "Новая модель"}</b>
           <div class="field" style="margin-top:8px;">
             <label>Название модели *</label>
-            <input id="apTitle" value="${escHtml(p.title)}" placeholder="Например: Nike Dunk Low Retro" />
+            <input id="apTitle" value="${escHtml(p.title)}" placeholder="Например: Nike Air Force 1 '07" />
           </div>
           <div class="field">
             <label>Бренд</label>
@@ -1404,7 +1413,7 @@
           </div>
           <div class="field">
             <label>Формат: Название | Бренд | Категория | Размеры | Цена | Фото (https://...)</label>
-            <textarea id="bulkLines" rows="4" placeholder="Nike Dunk Low | Nike | sneakers | 39-44 | 0 | https://..."></textarea>
+            <textarea id="bulkLines" rows="4" placeholder="Nike Air Force 1 | Nike | sneakers | 39-45 | 0 | https://..."></textarea>
           </div>
           <button class="btn-secondary" style="width:100%;" onclick="bulkImportProducts()">Загрузить списком</button>
         </div>
@@ -1502,7 +1511,7 @@
           title: parts[0] || "",
           brand: parts[1] || "",
           category: parts[2] || selectedCat,
-          sizes: parts[3] || "39-44",
+          sizes: parts[3] || "39-45",
           price: parts[4] || 0,
           image: parts[5] || ""
         };
