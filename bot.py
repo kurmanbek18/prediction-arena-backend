@@ -1,12 +1,5 @@
 """
-STYLE HUB — Backend v8.1 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
-
-Улучшения v8.1:
-  * Исправлена обработка статусов заявок и обратная связь по отправке сообщений клиенту.
-  * Добавлен удобный формат заявки для копирования и отправки поставщику (дропшиппинг без склада).
-  * Усилена валидация входных данных, фото, цен, размеров и защита от дублей заявок (req_id).
-  * Сохранены: пакетный импорт (/api/admin/import), серверный поиск и пагинация (/api/products),
-    избранное, «Топ недели», фильтры по бренду/цене/сортировке и автомиграция БД.
+STYLE HUB — Backend v8.2 (FastAPI + SQLAlchemy async + PostgreSQL/Neon или SQLite + Telegram Bot).
 """
 import base64
 import hashlib
@@ -66,14 +59,14 @@ AUTH_MAX_AGE = 72 * 3600
 DEFAULTS = {
     "shop_name": "STYLE HUB",
     "whatsapp": "",
-    "pay_text": "Цену называем до оплаты. Оплата только после того, как вы согласуете модель, размер и стоимость.",
-    "delivery_text": "Подбираем нужную пару в Бишкеке и по КР, уточняем наличие у поставщиков и связываемся в Telegram или WhatsApp.",
+    "pay_text": "Цену называем до оплаты. Оплата после того, как согласуем модель, размер и наличие.",
+    "delivery_text": "Работаем в Бишкеке и по КР: проверяем наличие у поставщиков и связываемся с вами в Telegram или WhatsApp.",
     "qr": "",
 }
 
 STATUSES = {
-    "new": "🔎 Новый запрос",
-    "searching": "🕵️ Ищем у поставщика",
+    "new": "🆕 Новая заявка",
+    "searching": "🔎 Проверяем наличие",
     "quoted": "💬 Цена отправлена",
     "confirmed": "✅ Подтверждён",
     "paid": "💰 Оплачен",
@@ -83,18 +76,15 @@ STATUSES = {
 }
 
 CLIENT_MSG = {
-    "searching": "🕵️ По запросу #{id} уточняем наличие и размер у поставщиков.",
-    "quoted": "💬 По запросу #{id} нашли вариант и цену — менеджер скоро напишет вам.",
+    "searching": "🔎 По заявке #{id} проверяем наличие и размер у поставщиков.",
+    "quoted": "💬 По заявке #{id} уточнили вариант и цену — менеджер скоро напишет вам.",
     "confirmed": "✅ Заказ #{id} подтверждён! Менеджер свяжется с вами по оплате и доставке.",
     "paid": "💰 Оплата по заказу #{id} получена. Спасибо, что выбрали STYLE HUB!",
     "shipped": "🚚 Заказ #{id} отправлен. Ожидайте доставку.",
-    "done": "🎉 Заказ #{id} доставлен. Спасибо за заказ в STYLE HUB!",
+    "done": "🎉 Заказ #{id} доставлен. Спасибо за покупку в STYLE HUB!",
     "cancel": "❌ Заказ #{id} отменён. Напишите нам, если нужно подобрать другую пару.",
 }
 
-# ----------------------------------------------------------------------------------------------
-# База данных
-# ----------------------------------------------------------------------------------------------
 url = os.getenv("DATABASE_URL", "").strip()
 if not url:
     log.warning("DATABASE_URL не задан — используется локальная SQLite БД (style_hub.db)")
@@ -191,9 +181,6 @@ class Favorite(Base):
     __table_args__ = (UniqueConstraint("uid", "pid", name="uq_shop_fav"),)
 
 
-# ----------------------------------------------------------------------------------------------
-# Утилиты
-# ----------------------------------------------------------------------------------------------
 def clean(v, n):
     return str(v or "").strip()[:n]
 
@@ -303,9 +290,6 @@ def money(v):
     return f"{float(v):,.0f}".replace(",", " ")
 
 
-# ----------------------------------------------------------------------------------------------
-# Сериализация
-# ----------------------------------------------------------------------------------------------
 async def get_settings(db):
     s = dict(DEFAULTS)
     for r in (await db.execute(select(Setting))).scalars():
@@ -338,7 +322,7 @@ def prod_dict(p):
         "color": p.color or "",
         "tags": p.tags or "",
         "price": price_val,
-        "price_label": "Цена по запросу" if on_request else f"{money(price_val)} сом",
+        "price_label": "Уточним цену" if on_request else f"{money(price_val)} сом",
         "on_request": on_request,
         "old_price": float(p.old_price or 0),
         "image": imgs[0] if imgs else "",
@@ -349,6 +333,7 @@ def prod_dict(p):
         "description": p.description or "",
         "active": bool(p.active),
         "is_top": bool(p.is_top),
+        "top_pos": int(p.top_pos or 0),
         "created": p.created,
     }
 
@@ -373,9 +358,6 @@ def order_dict(o):
     }
 
 
-# ----------------------------------------------------------------------------------------------
-# Авторизация Telegram
-# ----------------------------------------------------------------------------------------------
 async def auth(request: Request):
     init = request.headers.get("X-Init-Data", "")
     if not BOT_TOKEN or not init:
@@ -402,9 +384,6 @@ async def admin(who=Depends(auth)):
     return who
 
 
-# ----------------------------------------------------------------------------------------------
-# Telegram-бот
-# ----------------------------------------------------------------------------------------------
 async def tg(method, **payload):
     if not BOT_TOKEN:
         return None
@@ -430,7 +409,7 @@ def supplier_line(o):
         parts = [f"{i.get('title')} (р.{i.get('size')} ×{i.get('qty')})" for i in items]
         base = ", ".join(parts)
     else:
-        base = "Подбор пары по запросу клиента"
+        base = "Пара по описанию клиента"
     extra = f" — {o.comment}" if o.comment else ""
     return f"{base}{extra} ({o.address})"
 
@@ -439,16 +418,16 @@ def order_text(o):
     items = order_items(o)
     lines = "\n".join(f"• {esc(i.get('title'))} — р.{esc(i.get('size'))} × {i.get('qty')}" for i in items)
     if not lines:
-        lines = "• Подбор пары по описанию клиента"
+        lines = "• Пара по описанию клиента"
     total_str = "уточняем у поставщика" if (o.total or 0) <= 0 else f"{o.total:,.0f} сом"
     t = (
-        f"🔎 <b>Заявка #{o.id} · STYLE HUB</b> · {STATUSES.get(o.status, o.status)}\n\n"
+        f"🆕 <b>Заявка #{o.id} · STYLE HUB</b> · {STATUSES.get(o.status, o.status)}\n\n"
         f"{lines}\n\n"
         f"💰 Цена: <b>{total_str}</b>\n"
         f"👤 Клиент: {esc(o.username)}\n"
         f"📞 Телефон: {esc(o.phone)}\n"
         f"📍 Город / адрес: {esc(o.address)}\n"
-        f"📋 Для поставщика: <code>{esc(supplier_line(o))}</code>"
+        f"📋 Поставщику: <code>{esc(supplier_line(o))}</code>"
     )
     return t + (f"\n💬 Комментарий: {esc(o.comment)}" if o.comment else "")
 
@@ -456,15 +435,15 @@ def order_text(o):
 def order_kb(o):
     b = lambda t, s: {"text": t, "callback_data": f"st:{o.id}:{s}"}
     rows = [
-        [b("🕵️ Ищем", "searching"), b("💬 Цена дана", "quoted")],
+        [b("🔎 Наличие", "searching"), b("💬 Цена дана", "quoted")],
         [b("✅ Подтвердить", "confirmed"), b("💰 Оплачен", "paid")],
         [b("🚚 Отправлен", "shipped"), b("🎉 Доставлен", "done")],
         [b("❌ Отменить", "cancel")],
     ]
     w = wa_phone(o.phone)
     if w:
-        preview = ", ".join(f"{i.get('title')} (р.{i.get('size')})" for i in order_items(o)) or "подбор пары"
-        wa_text = quote(f"Здравствуйте! По заявке #{o.id} в STYLE HUB: {preview}. Уточняем наличие и цену.")
+        preview = ", ".join(f"{i.get('title')} (р.{i.get('size')})" for i in order_items(o)) or "выбор пары"
+        wa_text = quote(f"Здравствуйте! Пишем из STYLE HUB по заявке #{o.id}: {preview}. Уточнили детали и готовы ответить.")
         rows.append([{"text": "💬 Написать клиенту в WhatsApp", "url": f"https://wa.me/{w}?text={wa_text}"}])
     return {"inline_keyboard": rows}
 
@@ -476,7 +455,7 @@ async def notify_admins(o):
         await tg(
             "sendMessage",
             chat_id=aid,
-            text="🔔 Новый запрос в STYLE HUB!\n\n" + order_text(o),
+            text="🔔 Новая заявка в STYLE HUB!\n\n" + order_text(o),
             parse_mode="HTML",
             reply_markup=order_kb(o),
         )
@@ -532,17 +511,14 @@ async def on_message(m):
             chat_id=chat,
             reply_markup=kb,
             text=(
-                "Добро пожаловать в <b>STYLE HUB</b> — обувь и кроссовки в Бишкеке и по Кыргызстану.\n"
-                "Выберите модель и размер, оставьте запрос — мы уточним наличие и цену "
-                "и напишем вам в Telegram или WhatsApp."
+                "Добро пожаловать в <b>STYLE HUB</b> — кроссовки и обувь в Бишкеке и по КР.\n"
+                "Выбирайте модель и размер в каталоге, добавляйте в избранное или отправляйте заявку — "
+                "мы проверим наличие и свяжемся с вами."
             ),
             parse_mode="HTML",
         )
 
 
-# ----------------------------------------------------------------------------------------------
-# Старт: таблицы, миграции, индексы
-# ----------------------------------------------------------------------------------------------
 SEED_CATS = [
     ("sneakers", "Кроссовки", 1),
     ("sport", "Спорт и зал", 2),
@@ -623,7 +599,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="STYLE HUB — Бишкек", lifespan=lifespan)
+app = FastAPI(title="STYLE HUB", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=800)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -660,9 +636,6 @@ async def get_img(iid: int, db: AsyncSession = Depends(get_db)):
     return Response(im.data, media_type=im.mime, headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
-# ----------------------------------------------------------------------------------------------
-# Публичный каталог: поиск, фильтры, пагинация
-# ----------------------------------------------------------------------------------------------
 PRICE_FIRST = case((Product.price > 0, 0), else_=1)
 ORDERS = {
     "new": (Product.id.desc(),),
@@ -754,9 +727,6 @@ async def api_products(
     return {"items": [prod_dict(p) for p in rows], "total": total}
 
 
-# ----------------------------------------------------------------------------------------------
-# Избранное
-# ----------------------------------------------------------------------------------------------
 async def fav_ids(db, uid):
     return [r for r in (await db.execute(select(Favorite.pid).where(Favorite.uid == uid).order_by(Favorite.id.desc()))).scalars()]
 
@@ -798,9 +768,6 @@ async def set_favorite(pid: int, d: dict, db: AsyncSession = Depends(get_db), wh
     return {"on": on}
 
 
-# ----------------------------------------------------------------------------------------------
-# Заявки
-# ----------------------------------------------------------------------------------------------
 @app.post("/api/orders")
 async def create_order(d: dict, db: AsyncSession = Depends(get_db), who=Depends(auth)):
     phone, address, comment = clean(d.get("phone"), 32), clean(d.get("address"), 200), clean(d.get("comment"), 500)
@@ -819,13 +786,13 @@ async def create_order(d: dict, db: AsyncSession = Depends(get_db), who=Depends(
         await db.execute(select(func.count(Order.id)).where(Order.uid == who["id"], Order.created > time.time() - 60))
     ).scalar() or 0
     if recent >= 5:
-        raise HTTPException(429, "Слишком много запросов подряд. Подождите минуту.")
+        raise HTTPException(429, "Слишком много заявок подряд. Подождите минуту.")
 
     items = d.get("items") or []
     if not isinstance(items, list) or len(items) > 20:
         raise HTTPException(400, "Слишком много позиций в заявке")
     if not items and len(comment) < 4:
-        raise HTTPException(400, "Выберите модель или опишите, какую пару нужно найти")
+        raise HTTPException(400, "Выберите модель или напишите пожелания в комментарии")
 
     lines, total = [], 0.0
     try:
@@ -885,53 +852,58 @@ async def my_orders(db: AsyncSession = Depends(get_db), who=Depends(auth)):
 async def admin_stats(db: AsyncSession = Depends(get_db), _=Depends(admin)):
     cnt = lambda *w: select(func.count(Product.id)).where(*w)
     total = (await db.execute(cnt())).scalar() or 0
-    hidden = (await db.execute(cnt(Product.active == False))).scalar() or 0  # noqa: E712
-    priced = (await db.execute(cnt(Product.price > 0))).scalar() or 0
-    top = (await db.execute(cnt(Product.is_top == True))).scalar() or 0  # noqa: E712
-    legacy = (await db.execute(cnt(or_(Product.sku.is_(None), Product.sku == "")))).scalar() or 0
-    new_orders = (await db.execute(select(func.count(Order.id)).where(Order.status == "new"))).scalar() or 0
-    return {"total": total, "hidden": hidden, "priced": priced, "top": top, "legacy": legacy, "new_orders": new_orders}
+    active = (await db.execute(cnt(Product.active == True))).scalar() or 0  # noqa: E712
+    top = (await db.execute(cnt(Product.active == True, Product.is_top == True))).scalar() or 0  # noqa: E712
+    orders_total = (await db.execute(select(func.count(Order.id)))).scalar() or 0
+    orders_new = (await db.execute(select(func.count(Order.id)).where(Order.status == "new"))).scalar() or 0
+    return {
+        "products_total": total,
+        "products_active": active,
+        "top_count": top,
+        "orders_total": orders_total,
+        "orders_new": orders_new,
+    }
 
 
 @app.get("/api/admin/products")
 async def admin_products(
     q: str = "",
-    state: str = "all",
+    cat: str = "",
+    limit: int = 100,
     offset: int = 0,
-    limit: int = 30,
     db: AsyncSession = Depends(get_db),
     _=Depends(admin),
 ):
-    limit, offset = max(1, min(limit, 100)), max(0, offset)
-    where = catalog_filters(q)
-    if state == "active":
-        where.append(Product.active == True)  # noqa: E712
-    elif state == "hidden":
-        where.append(Product.active == False)  # noqa: E712
-    elif state == "top":
-        where.append(Product.is_top == True)  # noqa: E712
-    elif state == "request":
-        where.append(or_(Product.price <= 0, Product.price.is_(None)))
+    limit, offset = max(1, min(limit, 200)), max(0, offset)
+    where = []
+    if cat and cat != "all":
+        where.append(Product.category == cat)
+    for tok in norm(q).split()[:5]:
+        where.append(Product.search.like(f"%{esc_like(tok)}%", escape="\\"))
     total = (await db.execute(select(func.count(Product.id)).where(*where))).scalar() or 0
-    rows = (await db.execute(select(Product).where(*where).order_by(Product.id.desc()).offset(offset).limit(limit))).scalars().all()
+    rows = (
+        await db.execute(select(Product).where(*where).order_by(Product.is_top.desc(), Product.id.desc()).offset(offset).limit(limit))
+    ).scalars().all()
     return {"items": [prod_dict(p) for p in rows], "total": total}
 
 
 @app.post("/api/admin/products")
 async def admin_save_product(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
     try:
-        price, old = to_num(d.get("price")), to_num(d.get("old_price"))
-    except ValueError:
+        price = to_num(d.get("price"), 0.0)
+        old = to_num(d.get("old_price"), 0.0)
+    except Exception:
         raise HTTPException(400, "Цена должна быть числом или пустой")
     if price < 0 or old < 0:
         raise HTTPException(400, "Цена не может быть отрицательной")
+
     title = clean(d.get("title"), 120)
-    sizes = parse_sizes(d.get("sizes") or "39,40,41,42,43,44")
-    imgs = parse_images(d.get("images"))
-    if not title:
-        raise HTTPException(400, "Введите название модели")
-    if not sizes:
-        raise HTTPException(400, "Укажите хотя бы один размер")
+    sizes = parse_sizes(d.get("sizes", "39,40,41,42,43,44"))
+    imgs = parse_images(d.get("images") if d.get("images") is not None else d.get("image"))
+    if not title or not sizes:
+        raise HTTPException(400, "Заполните название и размеры")
+    if not imgs:
+        raise HTTPException(400, "Добавьте хотя бы одно фото (https://... или загрузите файл)")
 
     if d.get("id"):
         p = await db.get(Product, int(d["id"]))
@@ -941,179 +913,95 @@ async def admin_save_product(d: dict, db: AsyncSession = Depends(get_db), _=Depe
         p = Product()
         db.add(p)
 
-    p.title, p.brand = title, clean(d.get("brand"), 60)
-    p.color, p.tags = clean(d.get("color"), 60), clean(d.get("tags"), 200)
-    p.price, p.old_price, p.sizes = price, old, sizes
-    p.image, p.images = (imgs[0] if imgs else ""), json.dumps(imgs)
-    p.badge = clean(d.get("badge"), 20)
-    p.category = clean(d.get("category"), 40)
-    p.description = clean(d.get("description"), 1500)
-    p.active = to_bool(d.get("active"), True)
-    was_top = bool(p.is_top)
-    p.is_top = to_bool(d.get("is_top"), False)
-    if p.is_top and not was_top:
-        p.top_pos = int(time.time())
-    if d.get("sku"):
-        p.sku = clean(d.get("sku"), 60)
-    await db.flush()
-    if not p.sku:
-        p.sku = f"M{p.id}"
     cats = {c["slug"]: c["name"] for c in await get_cats(db)}
-    p.search = make_search(p.title, p.brand, p.color, p.tags, cats.get(p.category, ""), p.sku, p.sizes)
+    cat_slug = clean(d.get("category"), 40)
+    p.sku = clean(d.get("sku"), 40)
+    p.title = title
+    p.brand = clean(d.get("brand"), 60)
+    p.color = clean(d.get("color"), 60)
+    p.tags = clean(d.get("tags"), 200)
+    p.price = price
+    p.old_price = old
+    p.sizes = sizes
+    p.image = imgs[0]
+    p.images = json.dumps(imgs)
+    badge_clean = clean(d.get("badge"), 20)
+    p.badge = "" if badge_clean == "Узнать цену" else badge_clean
+    p.category = cat_slug
+    p.description = clean(d.get("description"), 1500)
+    p.is_top = to_bool(d.get("is_top"), False)
+    p.top_pos = int(to_num(d.get("top_pos"), 0))
+    p.active = to_bool(d.get("active"), True)
+    p.search = make_search(p.title, p.brand, p.color, p.tags, cats.get(cat_slug, ""), p.sku, p.sizes)
     await db.commit()
     return prod_dict(p)
 
 
-@app.post("/api/admin/products/{pid}/flags")
-async def admin_flags(pid: int, d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    p = await db.get(Product, pid)
-    if not p:
-        raise HTTPException(404, "Модель не найдена")
-    if "active" in d:
-        p.active = to_bool(d["active"], True)
-    if "is_top" in d:
-        new = to_bool(d["is_top"], False)
-        if new and not p.is_top:
-            p.top_pos = int(time.time())
-        p.is_top = new
+@app.post("/api/admin/import")
+async def admin_import_products(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    raw_items = d.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise HTTPException(400, "Передайте список моделей в поле items")
+    cats = {c["slug"]: c["name"] for c in await get_cats(db)}
+    fallback_img = "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=800"
+    added = 0
+    for item in raw_items[:500]:
+        if not isinstance(item, dict):
+            continue
+        title = clean(item.get("title"), 120)
+        if not title:
+            continue
+        try:
+            price = max(0.0, to_num(item.get("price"), 0.0))
+        except Exception:
+            price = 0.0
+        sizes = parse_sizes(item.get("sizes") or "39,40,41,42,43,44") or "39,40,41,42,43,44"
+        imgs = parse_images(item.get("images") if item.get("images") is not None else item.get("image"))
+        img = imgs[0] if imgs else fallback_img
+        brand = clean(item.get("brand"), 60)
+        color = clean(item.get("color"), 60)
+        tags = clean(item.get("tags"), 200)
+        sku = clean(item.get("sku"), 40)
+        cat_slug = clean(item.get("category") or "sneakers", 40)
+        is_top = to_bool(item.get("is_top"), False)
+        db.add(
+            Product(
+                sku=sku,
+                title=title,
+                brand=brand,
+                color=color,
+                tags=tags,
+                price=price,
+                old_price=0.0,
+                image=img,
+                images=json.dumps([img]),
+                badge=clean(item.get("badge"), 20),
+                sizes=sizes,
+                category=cat_slug,
+                description=clean(item.get("description") or "Проверим наличие и цену у поставщика.", 1500),
+                search=make_search(title, brand, color, tags, cats.get(cat_slug, ""), sku, sizes),
+                active=True,
+                is_top=is_top,
+                top_pos=1 if is_top else 0,
+            )
+        )
+        added += 1
     await db.commit()
-    return prod_dict(p)
+    return {"added": added}
 
 
 @app.delete("/api/admin/products/{pid}")
 async def admin_delete_product(pid: int, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    await db.execute(delete(Product).where(Product.id == pid))
     await db.execute(delete(Favorite).where(Favorite.pid == pid))
+    await db.execute(delete(Product).where(Product.id == pid))
     await db.commit()
     return {"ok": True}
 
 
-@app.post("/api/admin/products/purge_legacy")
-async def admin_purge_legacy(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    if d.get("confirm") is not True:
-        raise HTTPException(400, "Нужно подтверждение")
-    res = await db.execute(delete(Product).where(or_(Product.sku.is_(None), Product.sku == "")))
-    await db.execute(delete(Favorite).where(~Favorite.pid.in_(select(Product.id))))
-    await db.commit()
-    return {"deleted": res.rowcount or 0}
-
-
-IMPORT_BATCH_MAX = 250
-
-
-@app.post("/api/admin/import")
-async def admin_import(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    rows = d.get("rows")
-    if not isinstance(rows, list) or not rows:
-        raise HTTPException(400, "Нет строк для импорта")
-    if len(rows) > IMPORT_BATCH_MAX:
-        raise HTTPException(400, f"Не более {IMPORT_BATCH_MAX} строк за один запрос")
-    mode = "add" if d.get("mode") == "add" else "upsert"
-    offset = int(d.get("offset") or 0)
-
-    cats = await get_cats(db)
-    by_slug = {c["slug"].lower(): c["slug"] for c in cats}
-    by_name = {norm(c["name"]): c["slug"] for c in cats}
-    names = {c["slug"]: c["name"] for c in cats}
-    slug_counter = 0
-
-    def resolve_cat(raw):
-        nonlocal slug_counter
-        raw = clean(raw, 40)
-        if not raw:
-            return ""
-        key = raw.lower()
-        if key in by_slug:
-            return by_slug[key]
-        if norm(raw) in by_name:
-            return by_name[norm(raw)]
-        slug_counter += 1
-        slug = f"c{int(time.time() * 1000)}_{slug_counter}"
-        db.add(Category(slug=slug, name=raw[:30], pos=len(by_slug) + 10 + slug_counter))
-        by_slug[slug.lower()], by_name[norm(raw)], names[slug] = slug, slug, raw[:30]
-        return slug
-
-    errors, prepared = [], []
-    for n, r in enumerate(rows):
-        line = offset + n + 1
-        if not isinstance(r, dict):
-            errors.append({"row": line, "error": "строка не распознана"})
-            continue
-        title = clean(r.get("title"), 120)
-        if not title:
-            errors.append({"row": line, "error": "нет названия"})
-            continue
-        try:
-            price, old = to_num(r.get("price")), to_num(r.get("old_price"))
-            if price < 0 or old < 0:
-                raise ValueError
-        except ValueError:
-            errors.append({"row": line, "error": f"некорректная цена у «{title}»"})
-            continue
-        raw_imgs = r.get("images") or r.get("image") or ""
-        imgs = parse_images(raw_imgs)
-        if str(raw_imgs).strip() and not imgs:
-            errors.append({"row": line, "error": f"фото у «{title}» должно быть ссылкой https://"})
-            continue
-        brand, color = clean(r.get("brand"), 60), clean(r.get("color"), 60)
-        sku = clean(r.get("sku"), 60)
-        if not sku:
-            sku = "I-" + hashlib.sha1(f"{norm(title)}|{norm(brand)}|{norm(color)}".encode()).hexdigest()[:10]
-        prepared.append((line, sku, title, brand, color, price, old, imgs, r))
-
-    existing = {}
-    if mode == "upsert" and prepared:
-        skus = list({x[1] for x in prepared})
-        for p in (await db.execute(select(Product).where(Product.sku.in_(skus)))).scalars():
-            existing[p.sku] = p
-
-    added = updated = 0
-    for line, sku, title, brand, color, price, old, imgs, r in prepared:
-        p = existing.get(sku) if mode == "upsert" else None
-        creating = p is None
-        if creating:
-            p = Product(sku=sku)
-            db.add(p)
-        p.title, p.brand, p.color = title, brand, color
-        p.price, p.old_price = price, old
-        sizes = parse_sizes(r.get("sizes")) or (p.sizes if not creating else "39,40,41,42,43,44")
-        p.sizes = sizes
-        if imgs or creating:
-            p.image, p.images = (imgs[0] if imgs else ""), json.dumps(imgs)
-        cat = resolve_cat(r.get("category"))
-        if cat or creating:
-            p.category = cat
-        p.tags = clean(r.get("tags"), 200)
-        p.description = clean(r.get("description"), 1500)
-        if "active" in r and str(r.get("active")).strip() != "":
-            p.active = to_bool(r.get("active"), True)
-        elif creating:
-            p.active = True
-        if "top" in r and str(r.get("top")).strip() != "":
-            new_top = to_bool(r.get("top"))
-            if new_top and not p.is_top:
-                p.top_pos = int(time.time())
-            p.is_top = new_top
-        elif creating:
-            p.is_top = False
-        if creating:
-            p.badge = ""
-            existing[sku] = p
-            added += 1
-        else:
-            updated += 1
-        p.search = make_search(p.title, p.brand, p.color, p.tags, names.get(p.category, ""), p.sku, p.sizes)
-    await db.commit()
-    return {"added": added, "updated": updated, "skipped": len(errors), "errors": errors[:20]}
-
-
 @app.get("/api/admin/orders")
-async def admin_orders(status: str = "", db: AsyncSession = Depends(get_db), _=Depends(admin)):
-    stmt = select(Order).order_by(Order.id.desc()).limit(150)
-    if status in STATUSES:
-        stmt = select(Order).where(Order.status == status).order_by(Order.id.desc()).limit(150)
-    rows = [order_dict(o) for o in (await db.execute(stmt)).scalars()]
-    return rows
+async def admin_orders(db: AsyncSession = Depends(get_db), _=Depends(admin)):
+    rows = (await db.execute(select(Order).order_by(Order.id.desc()).limit(150))).scalars()
+    return [order_dict(o) for o in rows]
 
 
 @app.post("/api/admin/orders/{oid}/status")
@@ -1155,10 +1043,13 @@ async def admin_delete_cat(slug: str, db: AsyncSession = Depends(get_db), _=Depe
 async def admin_upload(d: dict, db: AsyncSession = Depends(get_db), _=Depends(admin)):
     m = re.match(r"data:(image/(?:jpeg|png|webp));base64,(.+)$", str(d.get("data", "")), re.S)
     if not m:
-        raise HTTPException(400, "Неверный формат изображения")
-    raw = base64.b64decode(m.group(2))
-    if len(raw) > 2_000_000:
-        raise HTTPException(400, "Фото слишком большое")
+        raise HTTPException(400, "Неверный формат изображения (нужны JPG, PNG или WEBP)")
+    try:
+        raw = base64.b64decode(m.group(2), validate=True)
+    except Exception:
+        raise HTTPException(400, "Повреждённый файл изображения")
+    if not raw or len(raw) > 2_500_000:
+        raise HTTPException(400, "Фото слишком большое (максимум 2.5 МБ)")
     im = Image(mime=m.group(1), data=raw)
     db.add(im)
     await db.commit()
@@ -1181,6 +1072,7 @@ async def admin_settings(d: dict, db: AsyncSession = Depends(get_db), _=Depends(
     await db.commit()
     s = await get_settings(db)
     s["app_link"] = APP_LINK
+    s.pop("qr", None)
     return s
 
 
