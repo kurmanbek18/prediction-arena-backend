@@ -573,7 +573,7 @@
   <header class="topbar">
     <div>
       <div class="brand-title" id="shopTitle">STYLE HUB</div>
-      <div class="brand-sub">Обувь и кроссовки · Бишкек и КР</div>
+      <div class="brand-sub">Кроссовки и обувь · Бишкек и КР</div>
     </div>
     <div class="top-actions">
       <a id="topWaBtn" class="pill-btn wa" href="#" target="_blank" style="display:none;">WhatsApp</a>
@@ -584,14 +584,14 @@
   </header>
 
   <section class="hero">
-    <h1>Стильная обувь и кроссовки с проверкой наличия</h1>
+    <h1>Актуальные модели с проверкой наличия</h1>
     <p>
-      Выберите модель и размер — мы проверим наличие у поставщиков, уточним цену и свяжемся с вами.
+      Выберите модель и размер — уточним наличие у поставщиков, подскажем актуальную цену и свяжемся с вами.
     </p>
   </section>
 
   <div class="search-wrap">
-    <input id="searchInput" class="search-input" type="search" placeholder="Найти модель, бренд, цвет или размер..." oninput="onSearchInput()" />
+    <input id="searchInput" class="search-input" type="search" placeholder="Поиск по модели, бренду, цвету или размеру..." oninput="onSearchInput()" />
     <button id="clearSearchBtn" class="clear-search" type="button" onclick="clearSearch()">✕</button>
   </div>
 
@@ -641,16 +641,14 @@
 
   <div id="toast" class="toast"></div>
 
-  <!-- Модалка товара -->
   <div id="productModal" class="modal-backdrop" onclick="backdropClose(event, 'productModal')">
     <div class="modal-sheet" id="productModalBody"></div>
   </div>
 
-  <!-- Модалка корзины / заявки -->
   <div id="cartModal" class="modal-backdrop" onclick="backdropClose(event, 'cartModal')">
     <div class="modal-sheet">
       <div class="modal-head">
-        <h2>Заявка в STYLE HUB</h2>
+        <h2>Оформление заявки</h2>
         <button class="close-btn" onclick="closeModal('cartModal')">✕</button>
       </div>
       <div id="cartItems"></div>
@@ -671,7 +669,6 @@
     </div>
   </div>
 
-  <!-- Модалка заказов -->
   <div id="ordersModal" class="modal-backdrop" onclick="backdropClose(event, 'ordersModal')">
     <div class="modal-sheet">
       <div class="modal-head">
@@ -682,11 +679,10 @@
     </div>
   </div>
 
-  <!-- Модалка условий -->
   <div id="infoModal" class="modal-backdrop" onclick="backdropClose(event, 'infoModal')">
     <div class="modal-sheet">
       <div class="modal-head">
-        <h2>Как работает STYLE HUB</h2>
+        <h2>Условия STYLE HUB</h2>
         <button class="close-btn" onclick="closeModal('infoModal')">✕</button>
       </div>
       <div class="info-box" id="infoDelivery"></div>
@@ -695,7 +691,6 @@
     </div>
   </div>
 
-  <!-- Модалка админки -->
   <div id="adminModal" class="modal-backdrop" onclick="backdropClose(event, 'adminModal')">
     <div class="modal-sheet">
       <div class="modal-head">
@@ -724,8 +719,8 @@
     const PAGE_SIZE = 24;
 
     const STATUS_LABELS = {
-      new: "🔎 Новый запрос",
-      searching: "🕵️ Ищем у поставщика",
+      new: "🆕 Новая заявка",
+      searching: "🔎 Проверяем наличие",
       quoted: "💬 Цена отправлена",
       confirmed: "✅ Подтверждён",
       paid: "💰 Оплачен",
@@ -895,7 +890,7 @@
         topWa.style.display = "none";
       }
 
-      document.getElementById("infoDelivery").innerHTML = `<b>Наличие и подбор:</b><br>${escHtml(state.cfg.delivery_text || "")}`;
+      document.getElementById("infoDelivery").innerHTML = `<b>Наличие и доставка:</b><br>${escHtml(state.cfg.delivery_text || "")}`;
       document.getElementById("infoPay").innerHTML = `<b>Цена и оплата:</b><br>${escHtml(state.cfg.pay_text || "")}`;
       document.getElementById("infoWaBox").innerHTML = link
         ? `<a class="btn-wa" href="${link}" target="_blank">Написать в WhatsApp</a>`
@@ -927,7 +922,7 @@
       }
       sec.style.display = "block";
       strip.innerHTML = state.top.map(p => {
-        const priceLabel = p.on_request || !p.price ? "Цена по запросу" : `${Number(p.price).toLocaleString("ru-RU")} сом`;
+        const priceLabel = p.on_request || !p.price ? "Уточним цену" : `${Number(p.price).toLocaleString("ru-RU")} сом`;
         return `
           <div class="top-mini-card">
             <div class="top-mini-img" onclick="openProductModal(${p.id})">
@@ -1088,9 +1083,9 @@
 
       grid.innerHTML = state.products.map(p => {
         const isFav = state.favIds.has(Number(p.id));
-        const priceText = p.price_label || (p.on_request || !p.price ? "Цена по запросу" : `${Number(p.price).toLocaleString("ru-RU")} сом`);
+        const priceText = p.price_label || (p.on_request || !p.price ? "Уточним цену" : `${Number(p.price).toLocaleString("ru-RU")} сом`);
         const sizesShort = (p.sizes || []).slice(0, 4).join(", ");
-        const badgeText = p.badge || (p.on_request || !p.price ? "Под заказ" : "");
+        const badgeText = p.badge || (p.on_request || !p.price ? "Уточним цену" : "");
 
         return `
           <article class="card">
@@ -1104,7 +1099,7 @@
               <div class="card-title" onclick="openProductModal(${p.id})">${escHtml(p.title)}</div>
               <div class="price-text">${escHtml(priceText)}</div>
               ${sizesShort ? `<div class="sizes-mini">Размеры: ${escHtml(sizesShort)}</div>` : ""}
-              <button class="btn-primary" onclick="quickAdd(${p.id})">${p.on_request || !p.price ? "Уточнить цену" : "В корзину"}</button>
+              <button class="btn-primary" onclick="quickAdd(${p.id})">В корзину</button>
             </div>
           </article>
         `;
@@ -1118,7 +1113,7 @@
       if (!p) return;
       const sizes = p.sizes && p.sizes.length ? p.sizes : ["39", "40", "41", "42", "43", "44"];
       const defaultSize = sizes.includes("42") ? "42" : sizes[0];
-      const priceText = p.on_request || !p.price ? "Цена по запросу — уточним наличие и стоимость" : `${Number(p.price).toLocaleString("ru-RU")} сом`;
+      const priceText = p.on_request || !p.price ? "Уточним цену после проверки наличия" : `${Number(p.price).toLocaleString("ru-RU")} сом`;
       const imgs = p.images && p.images.length ? p.images : [p.image];
       const isFav = state.favIds.has(Number(p.id));
 
@@ -1132,7 +1127,7 @@
           ${imgs.map(u => `<img src="${escHtml(u)}" style="width:180px;height:180px;object-fit:cover;border-radius:12px;flex:0 0 auto;border:1px solid var(--border);" />`).join("")}
         </div>
         <div class="price-text" style="margin-bottom:8px;">${escHtml(priceText)}</div>
-        <p style="margin:0 0 12px;font-size:13.5px;color:var(--muted);line-height:1.45;">${escHtml(p.description || "Проверим наличие размера и актуальную цену перед подтверждением.")}</p>
+        <p style="margin:0 0 12px;font-size:13.5px;color:var(--muted);line-height:1.45;">${escHtml(p.description || "Проверим наличие нужного размера и актуальную цену перед подтверждением.")}</p>
         <div class="field">
           <label>Выберите размер</label>
           <div class="size-pills" id="modalSizePills">
@@ -1141,7 +1136,7 @@
         </div>
         <div style="display:flex;gap:8px;">
           <button class="btn-secondary" type="button" onclick="toggleFavorite(${p.id})">${isFav ? "♥ В избранном" : "♡ В избранное"}</button>
-          <button class="btn-primary" type="button" onclick="addSelectedSize(${p.id})">Добавить в заявку</button>
+          <button class="btn-primary" type="button" onclick="addSelectedSize(${p.id})">В корзину</button>
         </div>
       `;
       openModal("productModal");
@@ -1185,7 +1180,7 @@
     function openCartModal() {
       renderCartItems();
       const summary = state.cart.map(x => `${x.title} (р.${x.size} ×${x.qty})`).join(", ");
-      const link = waLink(state.cfg.whatsapp, `Здравствуйте! Пишу в STYLE HUB по поводу модели: ${summary || "подбор пары"}.`);
+      const link = waLink(state.cfg.whatsapp, `Здравствуйте! Пишу в STYLE HUB по поводу модели: ${summary || "выбор пары"}.`);
       document.getElementById("cartWaBox").innerHTML = link
         ? `<a class="btn-wa" href="${link}" target="_blank">Написать в WhatsApp</a>`
         : "";
@@ -1202,7 +1197,7 @@
         <div class="cart-item">
           <div>
             <div style="font-weight:700;font-size:13.5px;">${escHtml(item.title)}</div>
-            <div style="font-size:12px;color:var(--muted);">Размер: ${escHtml(item.size)} · Кол-во: ${item.qty} · ${item.price > 0 ? `${item.price} сом` : "Цена по запросу"}</div>
+            <div style="font-size:12px;color:var(--muted);">Размер: ${escHtml(item.size)} · Кол-во: ${item.qty} · ${item.price > 0 ? `${item.price} сом` : "Уточним цену"}</div>
           </div>
           <button class="close-btn" onclick="removeCartItem(${idx})">Удалить</button>
         </div>
@@ -1223,7 +1218,7 @@
       const comment = document.getElementById("orderComment").value.trim();
 
       if (!state.cart.length && comment.length < 4) {
-        showToast("Выберите модель или опишите нужную пару в комментарии");
+        showToast("Выберите модель или опишите пожелания в комментарии");
         return;
       }
 
@@ -1247,7 +1242,7 @@
         document.getElementById("orderComment").value = "";
         updateCartCount();
         closeModal("cartModal");
-        showToast(`Заявка #${res.id} принята! Скоро свяжемся с вами.`);
+        showToast(`Заявка #${res.id} отправлена! Скоро свяжемся с вами.`);
       } catch (e) {
         showToast(e.message || "Не удалось отправить заявку");
       } finally {
@@ -1273,7 +1268,7 @@
               <span>${escHtml(STATUS_LABELS[o.status] || o.status)}</span>
             </div>
             <div style="font-size:12.5px;color:var(--muted);">
-              ${(o.items || []).map(i => `• ${escHtml(i.title)} (р.${escHtml(i.size)} × ${i.qty})`).join("<br>") || escHtml(o.comment || "Заявка на подбор")}
+              ${(o.items || []).map(i => `• ${escHtml(i.title)} (р.${escHtml(i.size)} × ${i.qty})`).join("<br>") || escHtml(o.comment || "Заявка")}
             </div>
             <div style="font-size:12px;font-weight:600;margin-top:6px;">
               ${o.on_request || !o.total ? "Цена: уточняется" : `Сумма: ${Number(o.total).toLocaleString("ru-RU")} сом`}
@@ -1290,7 +1285,6 @@
       openModal("infoModal");
     }
 
-    // Админка
     async function openAdminModal() {
       openModal("adminModal");
       await switchAdminTab(state.adminTab || "products");
@@ -1306,7 +1300,8 @@
       box.innerHTML = "Загрузка...";
       try {
         if (tab === "products") {
-          state.adminProducts = await api("/api/admin/products");
+          const res = await api("/api/admin/products?limit=80");
+          state.adminProducts = Array.isArray(res) ? res : (res.items || []);
           renderAdminProducts();
         } else if (tab === "orders") {
           state.adminOrders = await api("/api/admin/orders");
@@ -1351,8 +1346,8 @@
             </select>
           </div>
           <div class="field">
-            <label>Цена (сом) — оставьте пустым или 0, если цена по запросу</label>
-            <input id="apPrice" type="number" step="any" value="${p.price ? escHtml(p.price) : ""}" placeholder="Пусто = по запросу" />
+            <label>Цена (сом) — пусто или 0 = «Уточним цену»</label>
+            <input id="apPrice" type="number" step="any" value="${p.price ? escHtml(p.price) : ""}" placeholder="Пусто = уточним цену" />
           </div>
           <div class="field">
             <label>Размеры *</label>
@@ -1398,7 +1393,7 @@
             <div class="cart-item">
               <div>
                 <div style="font-weight:700;font-size:13px;">${escHtml(item.title)} ${item.is_top ? "· ★ Топ" : ""}</div>
-                <div style="font-size:11.5px;color:var(--muted);">${escHtml(item.category || "—")} · ${escHtml(item.price_label || "Цена по запросу")}</div>
+                <div style="font-size:11.5px;color:var(--muted);">${escHtml(item.category || "—")} · ${escHtml(item.price_label || "Уточним цену")}</div>
               </div>
               <div style="display:flex;gap:6px;">
                 <button class="close-btn" onclick='startEditProduct(${JSON.stringify(item).replace(/'/g, "&#39;")})'>Изм.</button>
@@ -1520,7 +1515,7 @@
               <span>Заявка #${o.id} · ${escHtml(o.username)}</span>
               <span>${escHtml(STATUS_LABELS[o.status] || o.status)}</span>
             </div>
-            <div style="font-size:12.5px;margin-top:6px;">${escHtml(itemsStr || o.comment || "Подбор пары")}</div>
+            <div style="font-size:12.5px;margin-top:6px;">${escHtml(itemsStr || o.comment || "Заявка")}</div>
             <div style="font-size:12px;color:var(--muted);margin-top:4px;">Тел: ${escHtml(o.phone)} · Адрес: ${escHtml(o.address)}</div>
             ${o.comment ? `<div style="font-size:12px;font-weight:600;margin-top:4px;">Комментарий: ${escHtml(o.comment)}</div>` : ""}
             <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
@@ -1608,7 +1603,7 @@
             <input id="setWa" value="${escHtml(cfg.whatsapp || "")}" />
           </div>
           <div class="field">
-            <label>Текст о наличии и подборе</label>
+            <label>Текст о наличии и доставке</label>
             <textarea id="setDelivery" rows="2">${escHtml(cfg.delivery_text || "")}</textarea>
           </div>
           <div class="field">
