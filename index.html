@@ -1322,6 +1322,7 @@
         image: "", badge: "", sizes: "39,40,41,42,43,44",
         category: state.cats[0]?.slug || "sneakers", description: "", is_top: false, active: true
       };
+      const defaultBulkCat = p.category || state.cats[0]?.slug || "sneakers";
       const box = document.getElementById("adminContent");
       box.innerHTML = `
         <div class="info-box">
@@ -1380,10 +1381,20 @@
         </div>
 
         <div class="info-box">
-          <b>Массовое добавление (каждая строка — модель)</b>
+          <b>Массовое добавление по категории</b>
           <div class="field" style="margin-top:8px;">
-            <label>Формат: Название | Бренд | Категория | Размеры | Цена (0 или пусто)</label>
-            <textarea id="bulkLines" rows="3" placeholder="Nike Dunk Low | Nike | sneakers | 39-44 | 0"></textarea>
+            <label>Категория для всего списка (если в строке не указана)</label>
+            <select id="bulkCat">
+              ${state.cats.map(c => `<option value="${escHtml(c.slug)}" ${c.slug === defaultBulkCat ? "selected" : ""}>${escHtml(c.name)}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field" style="display:flex;align-items:center;gap:8px;">
+            <input id="bulkTop" type="checkbox" style="width:auto;" />
+            <label for="bulkTop" style="margin:0;">Добавить весь список в «Топ недели»</label>
+          </div>
+          <div class="field">
+            <label>Формат: Название | Бренд | Категория | Размеры | Цена | Фото (https://...)</label>
+            <textarea id="bulkLines" rows="4" placeholder="Nike Dunk Low | Nike | sneakers | 39-44 | 0 | https://..."></textarea>
           </div>
           <button class="btn-secondary" style="width:100%;" onclick="bulkImportProducts()">Загрузить списком</button>
         </div>
@@ -1464,22 +1475,26 @@
 
     async function bulkImportProducts() {
       const raw = document.getElementById("bulkLines").value.trim();
+      const selectedCat = (document.getElementById("bulkCat") && document.getElementById("bulkCat").value) || "sneakers";
+      const isTop = Boolean(document.getElementById("bulkTop") && document.getElementById("bulkTop").checked);
       if (!raw) return showToast("Вставьте хотя бы одну строку");
+
       const items = raw.split("\n").map(line => {
         const parts = line.split("|").map(x => x.trim());
         return {
           title: parts[0] || "",
           brand: parts[1] || "",
-          category: parts[2] || "sneakers",
+          category: parts[2] || selectedCat,
           sizes: parts[3] || "39-44",
-          price: parts[4] || 0
+          price: parts[4] || 0,
+          image: parts[5] || ""
         };
       }).filter(x => x.title);
 
       try {
         const res = await api("/api/admin/import", {
           method: "POST",
-          body: JSON.stringify({ items })
+          body: JSON.stringify({ items, category: selectedCat, is_top: isTop })
         });
         showToast(`Добавлено: ${res.added ?? items.length}`);
         await initApp();
